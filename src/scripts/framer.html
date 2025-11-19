@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<!-- saved from url=(0071)file:///E:/Development/AARPA/software/workspace/sandbox/framer_gen.html -->
+<html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SDF Bevel Generator (GPU, Enhanced Lighting)</title>
+    <script src="./framer_files/saved_resource"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .canvas-container { 
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2); 
+            transition: all 0.3s ease;
+        }
+        .control-label { 
+            font-weight: 600; 
+            color: #374151; 
+            font-size: 0.85rem; 
+            margin-bottom: 2px;
+        }
+        .control-group { margin-bottom: 0.75rem; }
+        
+        input[type="range"] { height: 6px; }
+        input[type="range"]::-webkit-slider-thumb { width: 14px; height: 14px; }
+        
+        input[type="color"] { height: 32px; }
+        select { padding: 6px; }
+
+        .control-grid { 
+            display: grid; 
+            grid-template-columns: repeat(2, 1fr); 
+            gap: 12px; 
+        }
+        
+        /* The canvas itself should not have a background color, as the shader handles the color/transparency */
+        #sdfCanvas {
+            background-color: transparent;
+        }
+
+        @media (max-width: 1024px) {
+            #canvas-wrapper {
+                width: 100% !important;
+                height: auto !important;
+            }
+            #sdfCanvas {
+                width: 100% !important;
+                height: 100% !important;
+                max-width: 512px;
+                max-height: 512px;
+            }
+            .control-grid {
+                grid-template-columns: 1fr;
+                gap: 8px;
+            }
+        }
+    </style>
+<style>*, ::before, ::after{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgb(59 130 246 / 0.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }::backdrop{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgb(59 130 246 / 0.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }/* ! tailwindcss v3.4.17 | MIT License | https://tailwindcss.com */*,::after,::before{box-sizing:border-box;border-width:0;border-style:solid;border-color:#e5e7eb}::after,::before{--tw-content:''}:host,html{line-height:1.5;-webkit-text-size-adjust:100%;-moz-tab-size:4;tab-size:4;font-family:ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";font-feature-settings:normal;font-variation-settings:normal;-webkit-tap-highlight-color:transparent}body{margin:0;line-height:inherit}hr{height:0;color:inherit;border-top-width:1px}abbr:where([title]){-webkit-text-decoration:underline dotted;text-decoration:underline dotted}h1,h2,h3,h4,h5,h6{font-size:inherit;font-weight:inherit}a{color:inherit;text-decoration:inherit}b,strong{font-weight:bolder}code,kbd,pre,samp{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;font-feature-settings:normal;font-variation-settings:normal;font-size:1em}small{font-size:80%}sub,sup{font-size:75%;line-height:0;position:relative;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}table{text-indent:0;border-color:inherit;border-collapse:collapse}button,input,optgroup,select,textarea{font-family:inherit;font-feature-settings:inherit;font-variation-settings:inherit;font-size:100%;font-weight:inherit;line-height:inherit;letter-spacing:inherit;color:inherit;margin:0;padding:0}button,select{text-transform:none}button,input:where([type=button]),input:where([type=reset]),input:where([type=submit]){-webkit-appearance:button;background-color:transparent;background-image:none}:-moz-focusring{outline:auto}:-moz-ui-invalid{box-shadow:none}progress{vertical-align:baseline}::-webkit-inner-spin-button,::-webkit-outer-spin-button{height:auto}[type=search]{-webkit-appearance:textfield;outline-offset:-2px}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-file-upload-button{-webkit-appearance:button;font:inherit}summary{display:list-item}blockquote,dd,dl,figure,h1,h2,h3,h4,h5,h6,hr,p,pre{margin:0}fieldset{margin:0;padding:0}legend{padding:0}menu,ol,ul{list-style:none;margin:0;padding:0}dialog{padding:0}textarea{resize:vertical}input::placeholder,textarea::placeholder{opacity:1;color:#9ca3af}[role=button],button{cursor:pointer}:disabled{cursor:default}audio,canvas,embed,iframe,img,object,svg,video{display:block;vertical-align:middle}img,video{max-width:100%;height:auto}[hidden]:where(:not([hidden=until-found])){display:none}.order-1{order:1}.order-2{order:2}.col-span-2{grid-column:span 2 / span 2}.mx-auto{margin-left:auto;margin-right:auto}.mb-1{margin-bottom:0.25rem}.mb-4{margin-bottom:1rem}.mb-6{margin-bottom:1.5rem}.mt-2{margin-top:0.5rem}.mt-4{margin-top:1rem}.block{display:block}.flex{display:flex}.h-5{height:1.25rem}.h-8{height:2rem}.h-full{height:100%}.w-full{width:100%}.max-w-7xl{max-width:80rem}.flex-col{flex-direction:column}.items-center{align-items:center}.justify-center{justify-content:center}.gap-6{gap:1.5rem}.overflow-hidden{overflow:hidden}.rounded-lg{border-radius:0.5rem}.rounded-xl{border-radius:0.75rem}.border-t{border-top-width:1px}.bg-green-500{--tw-bg-opacity:1;background-color:rgb(34 197 94 / var(--tw-bg-opacity, 1))}.bg-white{--tw-bg-opacity:1;background-color:rgb(255 255 255 / var(--tw-bg-opacity, 1))}.p-4{padding:1rem}.py-2{padding-top:0.5rem;padding-bottom:0.5rem}.pt-3{padding-top:0.75rem}.text-center{text-align:center}.text-3xl{font-size:1.875rem;line-height:2.25rem}.text-sm{font-size:0.875rem;line-height:1.25rem}.text-xl{font-size:1.25rem;line-height:1.75rem}.text-xs{font-size:0.75rem;line-height:1rem}.font-bold{font-weight:700}.font-extrabold{font-weight:800}.font-normal{font-weight:400}.font-semibold{font-weight:600}.text-gray-500{--tw-text-opacity:1;color:rgb(107 114 128 / var(--tw-text-opacity, 1))}.text-gray-600{--tw-text-opacity:1;color:rgb(75 85 99 / var(--tw-text-opacity, 1))}.text-gray-700{--tw-text-opacity:1;color:rgb(55 65 81 / var(--tw-text-opacity, 1))}.text-gray-800{--tw-text-opacity:1;color:rgb(31 41 55 / var(--tw-text-opacity, 1))}.text-indigo-700{--tw-text-opacity:1;color:rgb(67 56 202 / var(--tw-text-opacity, 1))}.text-white{--tw-text-opacity:1;color:rgb(255 255 255 / var(--tw-text-opacity, 1))}.shadow-inner{--tw-shadow:inset 0 2px 4px 0 rgb(0 0 0 / 0.05);--tw-shadow-colored:inset 0 2px 4px 0 var(--tw-shadow-color);box-shadow:var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow)}.shadow-lg{--tw-shadow:0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);--tw-shadow-colored:0 10px 15px -3px var(--tw-shadow-color), 0 4px 6px -4px var(--tw-shadow-color);box-shadow:var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow)}.shadow-xl{--tw-shadow:0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);--tw-shadow-colored:0 20px 25px -5px var(--tw-shadow-color), 0 8px 10px -6px var(--tw-shadow-color);box-shadow:var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow)}.transition-colors{transition-property:color, background-color, border-color, fill, stroke, -webkit-text-decoration-color;transition-property:color, background-color, border-color, text-decoration-color, fill, stroke;transition-property:color, background-color, border-color, text-decoration-color, fill, stroke, -webkit-text-decoration-color;transition-timing-function:cubic-bezier(0.4, 0, 0.2, 1);transition-duration:150ms}.hover\:bg-green-600:hover{--tw-bg-opacity:1;background-color:rgb(22 163 74 / var(--tw-bg-opacity, 1))}.focus\:outline-none:focus{outline:2px solid transparent;outline-offset:2px}.focus\:ring-4:focus{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(4px + var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000)}.focus\:ring-green-500\/50:focus{--tw-ring-color:rgb(34 197 94 / 0.5)}@media (min-width: 640px){.sm\:p-6{padding:1.5rem}}@media (min-width: 1024px){.lg\:order-1{order:1}.lg\:order-2{order:2}.lg\:w-1\/3{width:33.333333%}.lg\:w-2\/3{width:66.666667%}.lg\:flex-row{flex-direction:row}}</style></head>
+<body class="p-4 sm:p-6">
+
+    <div class="max-w-7xl mx-auto">
+        <h1 class="text-3xl font-extrabold mb-1 text-gray-800">Spartan SDF Bevel Generator</h1>
+        <p class="text-gray-600 mb-6 text-sm">Real-time GPU rendering with noise displacement and custom profiles.</p>
+
+        <div class="flex flex-col lg:flex-row gap-6">
+
+            <div class="lg:w-1/3 bg-white p-4 rounded-xl shadow-xl h-full order-2 lg:order-1">
+                <h2 class="text-xl font-bold mb-4 text-indigo-700">Parameters</h2>
+                
+                <div id="controls" class="control-grid">
+                    
+                    <div class="control-group">
+                        <label for="shapeType" class="control-label block">Shape</label>
+                        <select id="shapeType">
+                            <option value="0">Rounded Box</option>
+                            <option value="1">Circle</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="bevelMode" class="control-label block">Bevel Mode</label>
+                        <select id="bevelMode">
+                            <option value="1">Raised (Outer)</option>
+                            <option value="-1">Pressed (Inner)</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="bevelShape" class="control-label block">Bevel Profile</label>
+                        <select id="bevelShape">
+                            <option value="0">Linear</option>
+                            <option value="1">Smoothstep</option>
+                            <option value="2">Inverse Linear</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="frameWidth" class="control-label block">Thickness: <span id="frameWidthValue" class="font-normal text-xs text-gray-500">10</span> px</label>
+                        <input type="range" id="frameWidth" min="10" max="150" value="20" class="w-full">
+                    </div>
+
+                    <div class="control-group">
+                        <label for="outerCornerRadius" class="control-label block">Outer Radius: <span id="outerCornerRadiusValue" class="font-normal text-xs text-gray-500">15</span> px</label>
+                        <input type="range" id="outerCornerRadius" min="0" max="150" value="30" class="w-full">
+                    </div>
+
+                    <div class="control-group">
+                        <label for="innerCornerRadius" class="control-label block">Inner Radius: <span id="innerCornerRadiusValue" class="font-normal text-xs text-gray-500">4</span> px</label>
+                        <input type="range" id="innerCornerRadius" min="0" max="150" value="20" class="w-full">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="bevelStrength" class="control-label block">Depth (Z): <span id="bevelStrengthValue" class="font-normal text-xs text-gray-500">23</span></label>
+                        <input type="range" id="bevelStrength" min="1" max="100" value="10" class="w-full">
+                    </div>
+
+                    <div class="control-group">
+                        <label for="plateauWidth" class="control-label block">Plateau Width (%): <span id="plateauWidthValue" class="font-normal text-xs text-gray-500">79</span></label>
+                        <input type="range" id="plateauWidth" min="0" max="100" value="0" class="w-full">
+                    </div>
+
+                    <div class="control-group">
+                        <label for="plateauSmoothness" class="control-label block">Plateau Curve Smoothness: <span id="plateauSmoothnessValue" class="font-normal text-xs text-gray-500">0.0</span></label>
+                        <input type="range" id="plateauSmoothness" min="0.0" max="1.0" step="0.05" value="0.0" class="w-full">
+                    </div>
+
+                    <div class="control-group">
+                        <label for="bevelSoftness" class="control-label block">Softness (Neumorphic): <span id="bevelSoftnessValue" class="font-normal text-xs text-gray-500">0.12</span></label>
+                        <input type="range" id="bevelSoftness" min="0.01" max="0.5" step="0.01" value="0.05" class="w-full">
+                    </div>
+
+                    <div class="col-span-2 text-sm font-semibold text-gray-700 mt-2 border-t pt-3">Enhanced Lighting (Blinn-Phong + Fresnel)</div>
+                    
+                    <div class="control-group">
+                        <label for="lightAngle" class="control-label block">Light XY Angle (Azimuth): <span id="lightAngleValue" class="font-normal text-xs text-gray-500">121</span> deg</label>
+                        <input type="range" id="lightAngle" min="0" max="360" value="45" class="w-full">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="lightAltitude" class="control-label block">Light Z Angle (Altitude): <span id="lightAltitudeValue" class="font-normal text-xs text-gray-500">26</span> deg</label>
+                        <input type="range" id="lightAltitude" min="1" max="90" value="45" class="w-full">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="ambientLight" class="control-label block">Ambient Light: <span id="ambientLightValue" class="font-normal text-xs text-gray-500">0.30</span></label>
+                        <input type="range" id="ambientLight" min="0.0" max="1.0" step="0.01" value="0.3" class="w-full">
+                    </div>
+
+                    <div class="control-group">
+                        <label for="diffuseStrength" class="control-label block">Diffuse Strength: <span id="diffuseStrengthValue" class="font-normal text-xs text-gray-500">0.5</span></label>
+                        <input type="range" id="diffuseStrength" min="0.0" max="2.0" step="0.01" value="1.0" class="w-full">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="shininess" class="control-label block">Shininess (Power): <span id="shininessValue" class="font-normal text-xs text-gray-500">130</span></label>
+                        <input type="range" id="shininess" min="1" max="200" value="20" class="w-full">
+                    </div>
+
+                    <div class="control-group">
+                        <label for="specularIntensity" class="control-label block">Specular/Reflectivity: <span id="specularIntensityValue" class="font-normal text-xs text-gray-500">0.50</span></label>
+                        <input type="range" id="specularIntensity" min="0.0" max="1.0" step="0.01" value="0.5" class="w-full">
+                    </div>
+                    
+                    <div class="col-span-2 text-sm font-semibold text-gray-700 mt-2 border-t pt-3">Noise Displacement</div>
+                    
+                    <div class="control-group">
+                        <label for="noiseAmplitude" class="control-label block">Amplitude: <span id="noiseAmplitudeValue" class="font-normal text-xs text-gray-500">0</span></label>
+                        <input type="range" id="noiseAmplitude" min="0" max="50" value="0" class="w-full">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="noiseFrequency" class="control-label block">Frequency: <span id="noiseFrequencyValue" class="font-normal text-xs text-gray-500">0.001</span></label>
+                        <input type="range" id="noiseFrequency" min="0.001" max="0.1" step="0.001" value="0.01" class="w-full">
+                    </div>
+
+                    <div class="control-group">
+                        <label for="noiseSpeed" class="control-label block">Speed: <span id="noiseSpeedValue" class="font-normal text-xs text-gray-500">0</span></label>
+                        <input type="range" id="noiseSpeed" min="0" max="50" value="0" class="w-full">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="padding" class="control-label block">Padding: <span id="paddingValue" class="font-normal text-xs text-gray-500">0</span> px</label>
+                        <input type="range" id="padding" min="0" max="100" value="10" class="w-full">
+                    </div>
+
+                    <div class="col-span-2 text-sm font-semibold text-gray-700 mt-2 border-t pt-3">Colors &amp; Output</div>
+
+                    <div class="control-group">
+                        <label for="primaryColor" class="control-label block">Frame Base Color</label>
+                        <input type="color" id="primaryColor" value="#4f46e5" class="h-8">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="bgColor" class="control-label block">Inside/Outside Color</label>
+                        <input type="color" id="bgColor" value="#e5e7eb" class="h-8">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="highlightColor" class="control-label block">Highlight/Specular</label>
+                        <input type="color" id="highlightColor" value="#ffffff" class="h-8">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="shadowColor" class="control-label block">Shadow/Dim</label>
+                        <input type="color" id="shadowColor" value="#2d3748" class="h-8">
+                    </div>
+
+                    <div class="control-group col-span-2">
+                        <label for="canvasSize" class="control-label block">Resolution: <span id="canvasSizeValue" class="font-normal text-xs text-gray-500">768</span> x 512 px</label>
+                        <input type="range" id="canvasSize" min="256" max="1024" step="256" value="512" class="w-full">
+                    </div>
+                </div>
+
+                <button id="generatePng" class="mt-4 w-full bg-green-500 hover:bg-green-600 text-white font-semibold py-2 rounded-lg transition-colors shadow-lg focus:outline-none focus:ring-4 focus:ring-green-500/50">
+                    Download PNG (Transparent)
+                </button>
+                <p id="statusMessage" class="mt-2 text-center text-sm text-gray-700 h-5"></p>
+            </div>
+
+            <div class="lg:w-2/3 flex justify-center items-center order-1 lg:order-2">
+                <div id="canvas-wrapper" class="canvas-container bg-white rounded-xl overflow-hidden p-4 flex justify-center items-center" style="width: 800px; height: 800px;">
+                    <canvas id="sdfCanvas" width="768" height="768" class="rounded-lg shadow-inner"></canvas>
+                </div>
+            </div>
+            
+        </div>
+    </div>
+
+    <script id="vs" type="x-shader/x-vertex">
+        attribute vec2 position;
+        void main() {
+            gl_Position = vec4(position, 0.0, 1.0);
+        }
+    </script>
+
+    <script id="fs" type="x-shader/x-fragment">
+        precision highp float;
+
+        uniform vec2 u_resolution;
+        uniform float u_time;
+        uniform float u_frameWidth;
+        uniform float u_outerRadius;
+        uniform float u_innerRadius;
+        uniform float u_bevelStrength;
+        uniform float u_lightAngle;
+        uniform float u_lightAltitude;
+        uniform float u_specularIntensity; 
+        uniform float u_bevelMode; 
+        uniform float u_bevelShape; 
+        uniform float u_bevelSoftness;
+        uniform float u_noiseAmplitude;
+        uniform float u_noiseFrequency;
+        uniform float u_noiseSpeed;
+        uniform float u_padding;
+        uniform float u_shapeType; 
+        uniform float u_ambientLight; 
+        uniform float u_diffuseStrength; 
+        uniform float u_shininess; 
+        uniform float u_plateauWidth;
+        uniform float u_plateauSmoothness; 
+        uniform float u_exportMode;
+
+        uniform vec3 u_primaryColor;
+        uniform vec3 u_highlightColor;
+        uniform vec3 u_shadowColor;
+        uniform vec3 u_bgColor;
+
+        const float L_Z_STRENGTH = 1.0; 
+        const float EPSILON = 1.0; 
+        const float PI = 3.14159265359;
+
+        // --- Utility Functions ---
+
+        float hash(vec2 p) {
+            p = fract(p * 0.3183099 + vec2(0.1));
+            p *= 17.0;
+            return fract(p.x * p.y * (p.x + p.y));
+        }
+
+        float noise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            vec2 u = f*f*(3.0-2.0*f); 
+            
+            float a = hash(i);
+            float b = hash(i + vec2(1.0, 0.0));
+            float c = hash(i + vec2(0.0, 1.0));
+            float d = hash(i + vec2(1.0, 1.0));
+            
+            return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+        }
+
+        // --- SDF Primitives ---
+        
+        float sdfRoundedBox(vec2 p, vec2 size, float radius) {
+            vec2 d = abs(p) - size;
+            return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - radius;
+        }
+
+        float sdfCircle(vec2 p, float radius) {
+            return length(p) - radius;
+        }
+
+        float map(vec2 p, vec2 boxHalfSize, float radius, float shapeType) {
+            if (shapeType == 0.0) { 
+                return sdfRoundedBox(p, boxHalfSize, radius);
+            } else { 
+                float r = boxHalfSize.x + radius; 
+                return sdfCircle(p, r);
+            }
+        }
+        
+        // Utility to get the 2D position displacement vector (noise applied along the 2D normal)
+        vec2 get_displacement_vector(vec2 p, vec2 boxHalfSizeCenter, float centerRadius) {
+            if (u_noiseAmplitude <= 0.0) return vec2(0.0);
+            
+            // Calculate 2D normal direction based on the core shape at P
+            // Uses its own small epsilon to determine the boundary direction
+            vec2 normal_dir = normalize(vec2(
+                 map(p + vec2(EPSILON, 0.0), boxHalfSizeCenter, centerRadius, u_shapeType) - map(p - vec2(EPSILON, 0.0), boxHalfSizeCenter, centerRadius, u_shapeType),
+                 map(p + vec2(0.0, EPSILON), boxHalfSizeCenter, centerRadius, u_shapeType) - map(p - vec2(0.0, EPSILON), boxHalfSizeCenter, centerRadius, u_shapeType)
+            ));
+            
+            // Calculate noise value
+            float noiseVal = noise(p * u_noiseFrequency + u_time * u_noiseSpeed) * 2.0 - 1.0;
+            
+            return normal_dir * noiseVal * u_noiseAmplitude;
+        }
+
+
+        // --- Height Profile Logic (Refactored) ---
+
+        // Calculates the height factor (t_ridge, 0.0 to 1.0) based on 2D position
+        float get_height_factor(vec2 p, float W_max, vec2 boxHalfSizeCenter, float centerRadius) {
+            // 1. Apply displacement to the sample point p
+            // NOTE: This displacement is internal to the height calculation for the normal map generation.
+            vec2 displacement = get_displacement_vector(p, boxHalfSizeCenter, centerRadius);
+            vec2 displaced_p = p + displacement;
+            
+            // 2. Calculate distance field using the displaced position
+            float d_center = map(displaced_p, boxHalfSizeCenter, centerRadius, u_shapeType);
+            float D_abs = abs(d_center); 
+
+            float plateau_fraction = clamp(u_plateauWidth / 100.0, 0.0, 0.99);
+            float W_plateau_half = W_max * plateau_fraction;
+
+            float t_ridge;
+
+            if (D_abs <= W_plateau_half) {
+                t_ridge = 1.0;
+            } else {
+                float W_slope = W_max - W_plateau_half;
+                
+                if (W_slope < 0.001) { 
+                    t_ridge = 1.0;
+                } else {
+                    float t_slope_raw = (D_abs - W_plateau_half) / W_slope;
+                    
+                    float smoothed_t_slope_raw = mix(t_slope_raw, smoothstep(0.0, 1.0, t_slope_raw), u_plateauSmoothness);
+
+                    if (u_bevelShape == 1.0) { 
+                        t_ridge = 1.0 - smoothstep(0.0, 1.0, smoothed_t_slope_raw);
+                    } else if (u_bevelShape == 2.0) { 
+                        t_ridge = 1.0 - smoothed_t_slope_raw * smoothed_t_slope_raw;
+                    } else { 
+                        t_ridge = 1.0 - smoothed_t_slope_raw;
+                    }
+                }
+            }
+            return t_ridge;
+        }
+        
+        // --- Correct Normal Calculation (Finite Differences) ---
+        
+        // Calculates the 3D Normal using the numerical gradient of the height field H(p)
+        vec3 calculateNormal3D(vec2 p, float W_max, vec2 boxHalfSizeCenter, float centerRadius) {
+            const float H_EPSILON = 1.0; // Epsilon for numerical gradient calculation (in pixels)
+            
+            // Total Z height scale factor (Height = t_ridge * Z_SCALE)
+            float Z_SCALE = W_max * (u_bevelStrength / 50.0) * u_bevelMode * L_Z_STRENGTH; 
+
+            // Calculate height factor at small offsets
+            float h_x1 = get_height_factor(p + vec2(H_EPSILON, 0.0), W_max, boxHalfSizeCenter, centerRadius);
+            float h_x2 = get_height_factor(p - vec2(H_EPSILON, 0.0), W_max, boxHalfSizeCenter, centerRadius);
+            float h_y1 = get_height_factor(p + vec2(0.0, H_EPSILON), W_max, boxHalfSizeCenter, centerRadius);
+            float h_y2 = get_height_factor(p - vec2(0.0, H_EPSILON), W_max, boxHalfSizeCenter, centerRadius);
+
+            // Calculate gradient (slope) component: dH/dx and dH/dy
+            // The gradient is negative because the surface is defined as z = H(x,y)
+            vec3 n = normalize(vec3(
+                -(h_x1 - h_x2) / (2.0 * H_EPSILON) * Z_SCALE,
+                -(h_y1 - h_y2) / (2.0 * H_EPSILON) * Z_SCALE,
+                1.0
+            ));
+            
+            return n;
+        }
+
+        // --- Main Fragment Shader ---
+
+        void main() {
+            vec2 p_screen = gl_FragCoord.xy;
+            vec2 p = p_screen - u_resolution * 0.5; 
+            
+            float max_extent = u_resolution.x * 0.5 - u_padding;
+
+            float outerRadius = u_outerRadius;
+            float innerRadius = u_innerRadius;
+            
+            float W_max = u_frameWidth * 0.5; // Half width of the bevel area
+
+            float outerStraight = max(max_extent - outerRadius, 0.0);
+            float innerStraight = max(outerStraight - u_frameWidth, 0.0);
+            float centerRadius = max(outerRadius - W_max, 0.0);
+            float centerStraight = max(outerStraight - W_max, 0.0);
+            
+            vec2 boxHalfSizeOuter = vec2(outerStraight);
+            vec2 boxHalfSizeInner = vec2(innerStraight);
+            vec2 boxHalfSizeCenter = vec2(centerStraight);
+
+            // --- 1. Calculate Displacement and Displaced Position (for boundary check) ---
+            vec2 displacement = get_displacement_vector(p, boxHalfSizeCenter, centerRadius);
+            vec2 p_displaced_for_boundary = p + displacement;
+
+            // --- 2. Calculate base distances using the DISPLACED position ---
+            float outerDist = map(p_displaced_for_boundary, boxHalfSizeOuter, outerRadius, u_shapeType);
+            float innerDist = map(p_displaced_for_boundary, boxHalfSizeInner, innerRadius, u_shapeType);
+            
+            vec4 final_output_color;
+
+            // Check if fragment is within the displaced frame bounds
+            if (outerDist < 0.0 && innerDist > 0.0) {
+                
+                // --- 3. Correct 3D Normal Calculation (using ORIGINAL p) ---
+                // The normal calculation (via get_height_factor) already applies the height-based displacement internally.
+                vec3 normal = calculateNormal3D(p, W_max, boxHalfSizeCenter, centerRadius); 
+                
+                // --- Light Direction (using Altitude and Azimuth) ---
+                float lightAngleRad = u_lightAngle * (PI / 180.0);
+                float lightAltitudeRad = u_lightAltitude * (PI / 180.0);
+                
+                float L_altitude_cos = cos(lightAltitudeRad);
+                float L_altitude_sin = sin(lightAltitudeRad);
+
+                float L_x = cos(lightAngleRad) * L_altitude_cos;
+                float L_y = sin(lightAngleRad) * L_altitude_cos;
+                float L_z = L_altitude_sin;
+                
+                vec3 lightDir = normalize(vec3(L_x, L_y, L_z));
+                vec3 viewDir = vec3(0.0, 0.0, 1.0); // View is straight down onto the surface (Z-axis)
+                
+                // --- Blinn-Phong Lighting Model ---
+                vec3 ambient = u_primaryColor * u_ambientLight;
+                
+                // Diffuse
+                float NdotL_diffuse = max(dot(normal, lightDir), 0.0);
+                vec3 diffuse = u_primaryColor * NdotL_diffuse * u_diffuseStrength;
+                
+                // Specular
+                vec3 halfVector = normalize(lightDir + viewDir);
+                float NdotH = max(dot(normal, halfVector), 0.0);
+                float specularFactor = pow(NdotH, u_shininess);
+                vec3 specular = u_highlightColor * specularFactor * u_specularIntensity; 
+                
+                // --- Simplified Fresnel Reflection ---
+                const float F0 = 0.04; 
+                float cosTheta = max(0.0, dot(normal, viewDir));
+                float fresnel = F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+                vec3 reflection = u_highlightColor * fresnel * u_specularIntensity * 5.0; 
+                
+                // Final Lit Color
+                vec3 lit_color = ambient + diffuse + specular + reflection;
+
+                // --- Softness/Neumorphic Mix ---
+                float raw_NdotL = dot(normal, lightDir);
+                float shaded_dot = raw_NdotL * u_bevelMode; 
+
+                float light_mix_factor = smoothstep(-u_bevelSoftness, u_bevelSoftness, shaded_dot); 
+
+                vec3 shadow_tinted_color = mix(u_shadowColor, u_primaryColor * 0.8, u_diffuseStrength * 0.5);
+                
+                vec3 output_color = mix(shadow_tinted_color, lit_color, light_mix_factor);
+
+                final_output_color = vec4(output_color, 1.0);
+                
+            } else { 
+                // Outside the displaced bevel
+                if (u_exportMode < 0.5) {
+                    final_output_color = vec4(u_bgColor, 1.0);
+                } else {
+                    final_output_color = vec4(0.0, 0.0, 0.0, 0.0);
+                }
+            }
+            gl_FragColor = final_output_color;
+        }
+    </script>
+    
+    <script>
+        (function() {
+            function hexToRgb(hex) {
+                const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+                return result ? [
+                    parseInt(result[1], 16) / 255.0,
+                    parseInt(result[2], 16) / 255.0,
+                    parseInt(result[3], 16) / 255.0
+                ] : [0, 0, 0];
+            }
+
+            const canvas = document.getElementById('sdfCanvas');
+            const gl = canvas.getContext('webgl', { preserveDrawingBuffer: true, alpha: true }); 
+            let rafId = null;
+            let program;
+            let uLocations = {};
+            let startTime = performance.now();
+            let currentExportMode = 0.0;
+
+            const statusMessage = document.getElementById('statusMessage');
+
+            if (!gl) {
+                statusMessage.textContent = 'WebGL is not supported. Cannot render.';
+                return;
+            }
+
+            function compileShader(source, type) {
+                const shader = gl.createShader(type);
+                gl.shaderSource(shader, source);
+                gl.compileShader(shader);
+                if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                    console.error('Shader compile error: ' + gl.getShaderInfoLog(shader));
+                    gl.deleteShader(shader);
+                    return null; 
+                }
+                return shader;
+            }
+
+            function initWebGL() {
+                const vsSource = document.getElementById('vs').textContent;
+                const fsSource = document.getElementById('fs').textContent;
+
+                const vertexShader = compileShader(vsSource, gl.VERTEX_SHADER);
+                const fragmentShader = compileShader(fsSource, gl.FRAGMENT_SHADER);
+                
+                if (!vertexShader || !fragmentShader) {
+                    program = null;
+                    return;
+                }
+
+                program = gl.createProgram();
+                gl.attachShader(program, vertexShader);
+                gl.attachShader(program, fragmentShader);
+                gl.linkProgram(program);
+
+                if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                    console.error('Program link error: ' + gl.getProgramInfoLog(program));
+                    program = null; 
+                    return;
+                }
+
+                gl.useProgram(program);
+
+                const positionAttributeLocation = gl.getAttribLocation(program, 'position');
+                const positionBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+                const positions = new Float32Array([
+                    -1, -1, 1, -1, -1, 1,
+                    -1, 1, 1, -1, 1, 1,
+                ]);
+                gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+                gl.enableVertexAttribArray(positionAttributeLocation);
+                gl.vertexAttribPointer(positionAttributeLocation, 2, gl.FLOAT, false, 0, 0);
+                
+                gl.enable(gl.BLEND);
+                gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            }
+
+            function getUniformLocations() {
+                if (!program) return;
+
+                const uniforms = [
+                    'u_resolution', 'u_time', 'u_frameWidth', 'u_outerRadius', 'u_innerRadius',
+                    'u_bevelStrength', 'u_lightAngle', 'u_lightAltitude', 'u_specularIntensity', 'u_bevelMode',
+                    'u_bevelShape', 'u_bevelSoftness', 'u_noiseAmplitude', 'u_noiseFrequency',
+                    'u_noiseSpeed', 'u_padding', 'u_shapeType',
+                    'u_ambientLight', 'u_diffuseStrength', 'u_shininess', 
+                    'u_primaryColor', 'u_highlightColor', 'u_shadowColor', 'u_bgColor',
+                    'u_plateauWidth',
+                    'u_plateauSmoothness', 
+                    'u_exportMode'
+                ];
+                uniforms.forEach(name => {
+                    uLocations[name] = gl.getUniformLocation(program, name);
+                });
+            }
+
+            function getControls() {
+                const C = {
+                    frameWidth: parseFloat(document.getElementById('frameWidth').value),
+                    outerCornerRadius: parseFloat(document.getElementById('outerCornerRadius').value),
+                    innerCornerRadius: parseFloat(document.getElementById('innerCornerRadius').value),
+                    bevelStrength: parseFloat(document.getElementById('bevelStrength').value),
+                    plateauWidth: parseFloat(document.getElementById('plateauWidth').value),
+                    plateauSmoothness: parseFloat(document.getElementById('plateauSmoothness').value),
+                    lightAngle: parseFloat(document.getElementById('lightAngle').value),
+                    lightAltitude: parseFloat(document.getElementById('lightAltitude').value),
+                    specularIntensity: parseFloat(document.getElementById('specularIntensity').value),
+                    ambientLight: parseFloat(document.getElementById('ambientLight').value), 
+                    diffuseStrength: parseFloat(document.getElementById('diffuseStrength').value), 
+                    shininess: parseFloat(document.getElementById('shininess').value), 
+                    canvasSize: parseInt(document.getElementById('canvasSize').value),
+                    bevelMode: parseFloat(document.getElementById('bevelMode').value),
+                    bevelShape: parseFloat(document.getElementById('bevelShape').value),
+                    bevelSoftness: parseFloat(document.getElementById('bevelSoftness').value),
+                    noiseAmplitude: parseFloat(document.getElementById('noiseAmplitude').value),
+                    noiseFrequency: parseFloat(document.getElementById('noiseFrequency').value),
+                    noiseSpeed: parseFloat(document.getElementById('noiseSpeed').value),
+                    padding: parseFloat(document.getElementById('padding').value),
+                    shapeType: parseFloat(document.getElementById('shapeType').value),
+                    primaryRgb: hexToRgb(document.getElementById('primaryColor').value),
+                    highlightRgb: hexToRgb(document.getElementById('highlightColor').value),
+                    shadowRgb: hexToRgb(document.getElementById('shadowColor').value),
+                    bgRgb: hexToRgb(document.getElementById('bgColor').value),
+                };
+                
+                document.getElementById('frameWidthValue').textContent = C.frameWidth;
+                document.getElementById('outerCornerRadiusValue').textContent = C.outerCornerRadius;
+                document.getElementById('innerCornerRadiusValue').textContent = C.innerCornerRadius;
+                document.getElementById('bevelStrengthValue').textContent = C.bevelStrength;
+                document.getElementById('plateauWidthValue').textContent = C.plateauWidth;
+                document.getElementById('plateauSmoothnessValue').textContent = C.plateauSmoothness.toFixed(1);
+                document.getElementById('lightAngleValue').textContent = C.lightAngle;
+                document.getElementById('lightAltitudeValue').textContent = C.lightAltitude;
+                document.getElementById('specularIntensityValue').textContent = C.specularIntensity.toFixed(2);
+                document.getElementById('ambientLightValue').textContent = C.ambientLight.toFixed(2); 
+                document.getElementById('diffuseStrengthValue').textContent = C.diffuseStrength.toFixed(1); 
+                document.getElementById('shininessValue').textContent = C.shininess; 
+                document.getElementById('canvasSizeValue').textContent = C.canvasSize;
+                document.getElementById('bevelSoftnessValue').textContent = C.bevelSoftness.toFixed(2);
+                document.getElementById('noiseAmplitudeValue').textContent = C.noiseAmplitude;
+                document.getElementById('noiseFrequencyValue').textContent = C.noiseFrequency.toFixed(3);
+                document.getElementById('noiseSpeedValue').textContent = C.noiseSpeed;
+                document.getElementById('paddingValue').textContent = C.padding;
+
+                return C;
+            }
+
+            function resizeCanvas(newSize) {
+                if (canvas.width === newSize) return;
+                
+                canvas.width = newSize;
+                canvas.height = newSize;
+                gl.viewport(0, 0, newSize, newSize);
+                
+                const wrapper = document.getElementById('canvas-wrapper');
+                wrapper.style.width = `${newSize + 32}px`; 
+                wrapper.style.height = `${newSize + 32}px`; 
+            }
+
+            function render(currentTime = 0) {
+                if (!program) return;
+                
+                const C = getControls();
+                resizeCanvas(C.canvasSize);
+                
+                gl.clearColor(0.0, 0.0, 0.0, 0.0);
+                gl.clear(gl.COLOR_BUFFER_BIT);
+
+                const t = (currentTime - startTime) / 1000.0;
+                
+                gl.uniform2f(uLocations.u_resolution, C.canvasSize, C.canvasSize);
+                gl.uniform1f(uLocations.u_time, t);
+                gl.uniform1f(uLocations.u_frameWidth, C.frameWidth);
+                gl.uniform1f(uLocations.u_outerRadius, C.outerCornerRadius);
+                gl.uniform1f(uLocations.u_innerRadius, C.innerCornerRadius);
+                gl.uniform1f(uLocations.u_bevelStrength, C.bevelStrength);
+                gl.uniform1f(uLocations.u_plateauWidth, C.plateauWidth);
+                gl.uniform1f(uLocations.u_plateauSmoothness, C.plateauSmoothness);
+                gl.uniform1f(uLocations.u_lightAngle, C.lightAngle); 
+                gl.uniform1f(uLocations.u_lightAltitude, C.lightAltitude);
+                gl.uniform1f(uLocations.u_specularIntensity, C.specularIntensity);
+                gl.uniform1f(uLocations.u_bevelMode, C.bevelMode);
+                gl.uniform1f(uLocations.u_bevelShape, C.bevelShape);
+                gl.uniform1f(uLocations.u_bevelSoftness, C.bevelSoftness);
+                gl.uniform1f(uLocations.u_noiseAmplitude, C.noiseAmplitude);
+                gl.uniform1f(uLocations.u_noiseFrequency, C.noiseFrequency);
+                gl.uniform1f(uLocations.u_noiseSpeed, C.noiseSpeed);
+                gl.uniform1f(uLocations.u_padding, C.padding);
+                gl.uniform1f(uLocations.u_shapeType, C.shapeType);
+                
+                gl.uniform1f(uLocations.u_ambientLight, C.ambientLight);
+                gl.uniform1f(uLocations.u_diffuseStrength, C.diffuseStrength);
+                gl.uniform1f(uLocations.u_shininess, C.shininess);
+
+                gl.uniform3fv(uLocations.u_primaryColor, C.primaryRgb);
+                gl.uniform3fv(uLocations.u_highlightColor, C.highlightRgb);
+                gl.uniform3fv(uLocations.u_shadowColor, C.shadowRgb);
+                gl.uniform3fv(uLocations.u_bgColor, C.bgRgb);
+                
+                gl.uniform1f(uLocations.u_exportMode, currentExportMode);
+
+                gl.drawArrays(gl.TRIANGLES, 0, 6);
+            }
+
+            function animate(timestamp) {
+                if (!program) return;
+                
+                const C = getControls();
+
+                if (C.noiseSpeed === 0 && rafId !== null) {
+                    cancelAnimationFrame(rafId);
+                    rafId = null;
+                    render();
+                    return;
+                } 
+                
+                if (C.noiseSpeed > 0) {
+                    render(timestamp);
+                    rafId = requestAnimationFrame(animate);
+                }
+            }
+
+            function setup() {
+                initWebGL();
+                getUniformLocations();
+                if (program) {
+                    render(performance.now());
+                } else {
+                    statusMessage.textContent = 'Error: Failed to initialize WebGL program.';
+                }
+            }
+
+            document.getElementById('controls').addEventListener('input', () => {
+                if (!program) return;
+
+                if (getControls().noiseSpeed > 0 && rafId === null) {
+                    animate(performance.now());
+                } else {
+                    render(performance.now());
+                }
+            });
+            
+            document.getElementById('generatePng').addEventListener('click', () => {
+                if (!program) {
+                    statusMessage.textContent = 'Cannot download: WebGL program failed to initialize.';
+                    return;
+                }
+                
+                const currentSpeed = getControls().noiseSpeed;
+
+                // 1. Enter export mode
+                currentExportMode = 1.0;
+                if (rafId) cancelAnimationFrame(rafId);
+                render(performance.now());
+
+                // 2. Download the PNG
+                const dataURL = canvas.toDataURL('image/png');
+                
+                const link = document.createElement('a');
+                link.href = dataURL;
+                link.download = `sdf_bevel_transparent_${new Date().toISOString()}.png`;
+                
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                statusMessage.textContent = 'PNG downloaded successfully (fully transparent)!';
+                
+                // 3. Exit export mode and restore animation if needed
+                currentExportMode = 0.0;
+                
+                setTimeout(() => { 
+                    render(performance.now()); // Restore preview frame
+                    statusMessage.textContent = currentSpeed > 0 ? 'Animation running...' : ''; 
+                }, 100);
+
+                if (currentSpeed > 0) {
+                    animate(performance.now());
+                }
+            });
+            
+            window.onload = () => {
+                setup();
+                if (program) {
+                    statusMessage.textContent = 'Ready! GPU rendering active.';
+                    setTimeout(() => statusMessage.textContent = '', 3000);
+                }
+            };
+        })();
+    </script>
+
+</body></html>
