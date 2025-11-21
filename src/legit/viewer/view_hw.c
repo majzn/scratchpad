@@ -43,6 +43,7 @@
 #define IDM_DRAW_TOOL_PEN       (IDM_DRAW_MENU_BASE + 9)
 #define IDM_DRAW_TOOL_ERASER    (IDM_DRAW_MENU_BASE + 10)
 #define IDM_DRAW_TOOL_SHAPE     (IDM_DRAW_MENU_BASE + 15)
+#define IDM_DRAW_TOOL_FILL      (IDM_DRAW_MENU_BASE + 23)
 #define IDM_DRAW_CLEAR          (IDM_DRAW_MENU_BASE + 11)
 #define IDM_DRAW_TOGGLE         (IDM_DRAW_MENU_BASE + 12)
 #define IDM_DRAW_COLOR_SELECTOR (IDM_DRAW_MENU_BASE + 13) 
@@ -54,7 +55,6 @@
 #define IDM_SHAPE_OUTLINE_TOGGLE (IDM_DRAW_MENU_BASE + 20)
 #define IDM_SHAPE_FILL_COLOR    (IDM_DRAW_MENU_BASE + 21)
 #define IDM_SHAPE_OUTLINE_COLOR (IDM_DRAW_MENU_BASE + 22)
-#define IDM_DRAW_TOOL_FILL      (IDM_DRAW_MENU_BASE + 23)
 #define IDM_SHAPE_GRID          (IDM_DRAW_MENU_BASE + 24)
 #define IDM_GRID_ROWS_INC       (IDM_DRAW_MENU_BASE + 25)
 #define IDM_GRID_ROWS_DEC       (IDM_DRAW_MENU_BASE + 26)
@@ -155,7 +155,6 @@ static GLuint g_texture_id = 0;
 
 extern int pngl_write_png(char const *filename, int w, int h, int comp, const void *data, int stride_bytes);
 
-/* --- FUNCTION PROTOTYPES --- */
 void update_window_title(HWND hWnd);
 void clear_drawing_layer(HWND hWnd);
 void clear_temp_layer(void);
@@ -181,7 +180,6 @@ void draw_line_segment_to_buffer(int x0, int y0, int x1, int y1, COLORREF color,
 void draw_rectangle_to_buffer(int x0, int y0, int x1, int y1, COLORREF fill, COLORREF outline, int radius, int is_filled, int is_outlined, pngl_uc *buffer);
 void draw_circle_to_buffer_shape(int x0, int y0, int x1, int y1, COLORREF fill, COLORREF outline, int radius, int is_filled, int is_outlined, pngl_uc *buffer);
 void draw_grid_to_buffer(int x0, int y0, int x1, int y1, COLORREF outline, int radius, int rows, int cols, pngl_uc *buffer);
-/* ----------------------------------------------------- */
 
 
 int allocate_framebuffer(int w, int h) {
@@ -417,12 +415,11 @@ void upload_image_texture(pngl_uc *data, int w, int h) {
     glGenTextures(1, &g_texture_id);
     glBindTexture(GL_TEXTURE_2D, g_texture_id);
     
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     
-    /* Image data is pre-multiplied BGRA format */
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, data);
     
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -658,29 +655,22 @@ void draw_image_raw(u32 *fb, int fb_w, int fb_h,
     scale_x = (float)img_w / (float)draw_w;
     scale_y = (float)img_h / (float)draw_h;
 
-    /* OPTIMIZATION: Calculate clipping bounds (screen coordinates) */
-    
-    /* Determine visible pixel range on screen (clipping) */
     x_start = max(0, -dest_x);
     y_start = max(0, -dest_y);
     x_end = min(draw_w, fb_w - dest_x);
     y_end = min(draw_h, fb_h - dest_y);
     
-    /* Ensure clip range is valid */
     if (x_start >= x_end || y_start >= y_end) return;
 
     for (int y = y_start; y < y_end; y++) {
         for (int x = x_start; x < x_end; x++) {
             
-            int dx = dest_x + x; /* Screen destination X */
-            int dy = dest_y + y; /* Screen destination Y */
+            int dx = dest_x + x; 
+            int dy = dest_y + y; 
             
-            /* Calculate source coordinates (sampling) */
             int src_x = (int)(x * scale_x);
             int src_y = (int)(y * scale_y);
             
-            /* Ensure src coordinates are within image bounds (should generally be true 
-               if draw_w/h are proportional to img_w/h, but necessary for safety) */
             if (src_x < 0 || src_x >= img_w || src_y < 0 || src_y >= img_h) continue;
 
             pngl_uc *src_uc = img_data + (src_y * img_w + src_x) * 4;
@@ -718,8 +708,6 @@ void render_drawing_object_software(u32 *fb, int fb_w, int fb_h, int index, cons
     scale_x = (float)obj->w / (float)draw_w;
     scale_y = (float)obj->h / (float)draw_h;
     
-    /* OPTIMIZATION: Calculate clipping bounds (screen coordinates) */
-    
     x_start = max(0, -draw_x);
     y_start = max(0, -draw_y);
     x_end = min(draw_w, fb_w - draw_x);
@@ -733,7 +721,6 @@ void render_drawing_object_software(u32 *fb, int fb_w, int fb_h, int index, cons
             int dx = draw_x + x;
             int dy = draw_y + y;
             
-            /* Calculate source coordinates (sampling) */
             int src_x = (int)(x * scale_x);
             int src_y = (int)(y * scale_y);
             
@@ -946,17 +933,26 @@ void draw_background_opengl(int mode, int w, int h) {
     int tile_size = 16;
     
     if (mode == 0 || mode == 9) {
-        /* Tile background needs to be drawn with quads if GL is used */
         u32 color_light = (mode == 0) ? 0xFFC0C0C0 : 0xFF505050; 
         u32 color_dark  = (mode == 0) ? 0xFF808080 : 0xFF303030;
         
         glDisable(GL_TEXTURE_2D);
         glDisable(GL_BLEND);
         
-        for (x = 0; x < w; x += tile_size) {
-            for (y = 0; y < h; y += tile_size) {
+        int pattern_offset_x = (int)fmodf(g_offset_x, (float)tile_size * 2);
+        int pattern_offset_y = (int)fmodf(g_offset_y, (float)tile_size * 2);
+        
+        if (pattern_offset_x < 0) pattern_offset_x += tile_size * 2;
+        if (pattern_offset_y < 0) pattern_offset_y += tile_size * 2;
+        
+        for (x = -pattern_offset_x; x < w; x += tile_size) {
+            for (y = -pattern_offset_y; y < h; y += tile_size) {
+                
+                int tile_index_x = (x + pattern_offset_x) / tile_size;
+                int tile_index_y = (y + pattern_offset_y) / tile_size;
+
                 u32 color_u32_tile;
-                if (((x / tile_size) + (y / tile_size)) % 2 == 0) {
+                if ((tile_index_x + tile_index_y) % 2 == 0) {
                     color_u32_tile = color_light;
                 } else {
                     color_u32_tile = color_dark;
@@ -977,7 +973,7 @@ void draw_background_opengl(int mode, int w, int h) {
         g = (float)((color_u32 >> 8) & 0xFF) / 255.0f;
         b = (float)(color_u32 & 0xFF) / 255.0f;
         glClearColor(r, g, b, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
 }
 
@@ -994,22 +990,18 @@ void render_opengl(HWND hWnd) {
 
     glViewport(0, 0, client_w, client_h);
     
-    /* 1. Draw Background (Clear or Tiled Quads) */
     draw_background_opengl(g_background_mode, client_w, client_h);
 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    /* Set Y-down coordinate system for screen space (0,0 top-left) */
     gluOrtho2D(0, (GLdouble)client_w, (GLdouble)client_h, 0); 
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     
     glEnable(GL_BLEND);
-    /* CRITICAL FIX: Use GL_ONE for pre-multiplied alpha source data */
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); 
     
-    /* 2. Draw Main Image */
     if (g_image_data != NULL && g_texture_id != 0) {
         int scaled_width = (int)((float)g_width * g_scale);
         int scaled_height = (int)((float)g_height * g_scale);
@@ -1025,7 +1017,7 @@ void render_opengl(HWND hWnd) {
         
         switch (g_draw_mode) {
             case 0:
-            default: /* Normal (Pan & Zoom) */
+            default: 
                 draw_w = scaled_width;
                 draw_h = scaled_height;
                 draw_x = dest_x;
@@ -1034,7 +1026,7 @@ void render_opengl(HWND hWnd) {
                 draw_quad((float)draw_x, (float)draw_y, (float)draw_w, (float)draw_h, 0.0f, 0.0f, tx_end, ty_end);
                 break;
                 
-            case 1: /* Tiled / Repeat */
+            case 1: 
                 if (scaled_width > 0 && scaled_height > 0) {
                     int tile_x_start = (int)floorf((float)(client_rect.left - dest_x) / scaled_width);
                     int tile_y_start = (int)floorf((float)(client_rect.top - dest_y) / scaled_height);
@@ -1045,11 +1037,9 @@ void render_opengl(HWND hWnd) {
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
                     
-                    /* Calculate texture coords based on tile coverage */
                     tx_end = (float)(tile_x_end - tile_x_start);
                     ty_end = (float)(tile_y_end - tile_y_start);
 
-                    /* Calculate screen draw start/end */
                     float screen_x_start = (float)dest_x + (float)tile_x_start * (float)scaled_width;
                     float screen_y_start = (float)dest_y + (float)tile_y_start * (float)scaled_height;
                     float screen_w_total = (float)(tile_x_end - tile_x_start) * (float)scaled_width;
@@ -1062,7 +1052,7 @@ void render_opengl(HWND hWnd) {
                 }
                 break;
                 
-            case 2: /* Scaled-to-Fit */
+            case 2: 
                 {
                     float aspect_ratio = (float)g_width / (float)g_height;
                     float window_aspect = (float)client_w / (float)client_h;
@@ -1086,40 +1076,74 @@ void render_opengl(HWND hWnd) {
         glBindTexture(GL_TEXTURE_2D, 0); 
     }
     
-    /* 3. Draw Software Drawing Layer (if active) */
+    glEnable(GL_TEXTURE_2D);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); 
+
+    for (int i = 0; i < g_drawing_count; ++i) {
+        const SavedDrawingObject *obj = &g_saved_drawings[i];
+        if (obj->data == NULL) continue;
+        
+        float render_scale = g_scale / obj->scale_at_save;
+
+        int draw_w = (int)((float)obj->w * render_scale);
+        int draw_h = (int)((float)obj->h * render_scale);
+        
+        int draw_x = (int)(obj->virtual_x * g_scale + g_offset_x);
+        int draw_y = (int)(obj->virtual_y * g_scale + g_offset_y);
+        
+        GLuint obj_texture_id;
+        glGenTextures(1, &obj_texture_id);
+        glBindTexture(GL_TEXTURE_2D, obj_texture_id);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, obj->w, obj->h, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, obj->data);
+        
+        glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+        draw_quad((float)draw_x, (float)draw_y, (float)draw_w, (float)draw_h, 0.0f, 0.0f, 1.0f, 1.0f);
+
+        glDeleteTextures(1, &obj_texture_id); 
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    
     if (g_is_drawing_mode) {
         if (g_framebuffer_data != NULL) {
-            /* Create and upload temporary texture for drawing buffer */
             GLuint draw_texture_id;
-            glGenTextures(1, &draw_texture_id);
-            glBindTexture(GL_TEXTURE_2D, draw_texture_id);
-
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-            /* Drawing buffer uses standard BGRA non-pre-multiplied alpha (as produced by draw_pixel_to_buffer) */
-            /* Temporarily change blend function for drawing buffer since it is NOT pre-multiplied */
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); 
-
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g_fb_w, g_fb_h, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, g_framebuffer_data);
+            pngl_uc *draw_buffer = g_framebuffer_data;
             
-            glEnable(GL_TEXTURE_2D);
-            glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-            draw_quad(0.0f, 0.0f, (float)client_w, (float)client_h, 0.0f, 0.0f, 1.0f, 1.0f);
+            if (g_mouse_down && g_draw_tool_mode == 2 && g_temp_framebuffer_data != NULL) {
+                draw_buffer = g_temp_framebuffer_data;
+            }
             
-            /* Clean up */
-            glDeleteTextures(1, &draw_texture_id);
-            glBindTexture(GL_TEXTURE_2D, 0);
+            if (draw_buffer != NULL) {
+                glGenTextures(1, &draw_texture_id);
+                glBindTexture(GL_TEXTURE_2D, draw_texture_id);
 
-            /* Restore pre-multiplied blend function for anything else that might draw later */
-            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); 
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); 
+
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g_fb_w, g_fb_h, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, draw_buffer);
+                
+                glEnable(GL_TEXTURE_2D);
+                glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+                draw_quad(0.0f, 0.0f, (float)client_w, (float)client_h, 0.0f, 0.0f, 1.0f, 1.0f);
+                
+                glDeleteTextures(1, &draw_texture_id);
+                glBindTexture(GL_TEXTURE_2D, 0);
+
+                glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); 
+            }
         }
     }
 
 
-    /* 4. Draw Bounding Boxes */
     if (g_selected_object_index != -1 && g_is_drawing_mode == 0) {
         const SavedDrawingObject *obj = &g_saved_drawings[g_selected_object_index];
         int draw_w = (int)((float)obj->w * (g_scale / obj->scale_at_save));
@@ -1157,12 +1181,18 @@ void init_opengl(HWND hWnd, HDC hdc) {
     pfd.iLayerType = PFD_MAIN_PLANE;
 
     iPixelFormat = ChoosePixelFormat(hdc, &pfd);
-    if (iPixelFormat == 0) return;
+    if (iPixelFormat == 0) {
+        return;
+    }
 
-    SetPixelFormat(hdc, iPixelFormat, &pfd);
+    if (!SetPixelFormat(hdc, iPixelFormat, &pfd)) {
+        return;
+    }
 
     g_hRC = wglCreateContext(hdc);
-    if (g_hRC == NULL) return;
+    if (g_hRC == NULL) {
+        return;
+    }
 
     wglMakeCurrent(hdc, g_hRC);
 
@@ -1413,13 +1443,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 
                 if (g_is_drawing_mode) {
                     if (g_mouse_mid_down) {
-                         /* Panning in Drawing Mode (Middle Mouse) */
                         g_offset_x += (float)(current_x - g_last_mouse_x);
                         g_offset_y += (float)(current_y - g_last_mouse_y);
                     } else if (g_mouse_down && g_draw_tool_mode != 3) {
-                        /* Drawing/Moving in Drawing Mode (Left Mouse) */
                         if (g_draw_tool_mode == 2) {
-                            /* Shape Preview */
                             clear_temp_layer();
                             if (g_temp_framebuffer_data != NULL) {
                                 switch (g_shape_mode) {
@@ -1430,31 +1457,24 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                                 }
                             }
                         } else {
-                             /* Continuous Pen/Eraser drawing on main buffer */
                             draw_line_to_framebuffer(g_last_mouse_x, g_last_mouse_y, current_x, current_y);
                         }
                     }
                 } else {
-                    /* Not Drawing Mode */
                     if (g_mouse_mid_down || (g_mouse_down && g_dragging_object_index == -1)) {
-                        /* Panning (Middle Mouse always pans, Left Mouse pans if no object is grabbed) */
                         if (g_draw_mode == 0 || g_draw_mode == 1) {
                             g_offset_x += (float)(current_x - g_last_mouse_x);
                             g_offset_y += (float)(current_y - g_last_mouse_y);
                         }
                     } else if (g_mouse_down && g_dragging_object_index != -1) {
-                        /* Moving a saved object (Left Mouse only) - FIX APPLIED HERE */
                         SavedDrawingObject *obj = &g_saved_drawings[g_dragging_object_index];
                         
                         float dx_screen = (float)(current_x - g_last_mouse_x);
                         float dy_screen = (float)(current_y - g_last_mouse_y);
                         
-                        /* FIX: Global scale (g_scale) is the factor to convert screen delta to world delta. */
                         float dx_world = dx_screen / g_scale; 
                         float dy_world = dy_screen / g_scale;
                         
-                        /* Update object's virtual position in world space. 
-                           The object rendering recalculates scale relative to g_scale/obj->scale_at_save. */
                         obj->virtual_x += dx_world;
                         obj->virtual_y += dy_world;
                     }
@@ -1490,7 +1510,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
        			 	pt.y = GET_Y_LPARAM(lParam);
         			ScreenToClient(hWnd, &pt);
         			
-                    /* FIX: Assign converted client coordinates to mouse_x/y */
         			mouse_x = pt.x;
         			mouse_y = pt.y;
 
@@ -1784,7 +1803,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     int window_w = 800, window_h = 600; 
     
     memset(&app, 0, sizeof(AppState));
-    app.render_mode = 0; /* Default to Software */
+    app.render_mode = 0; 
     
     if (argparse_process_args((ArgParseState *)&app, __argv, __argc, option_table)) {
         return 1;
@@ -1876,7 +1895,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     {
         RECT client_rect;
         GetClientRect(hWnd, &client_rect);
-        /* Initialize drawing buffers using the starting client size */
         init_drawing_buffers(client_rect.right, client_rect.bottom);
     }
 
@@ -1897,8 +1915,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     return (int)msg.wParam;
 }
 
-
-/* --- START OF FUNCTIONS THAT WERE IMPLICITLY DECLARED --- */
 
 void clear_drawing_layer(HWND hWnd) {
     if (g_framebuffer_data != NULL) {
@@ -2602,7 +2618,6 @@ void bake_current_layer(HWND hWnd) {
         new_obj->w = new_w;
         new_obj->h = new_h;
         
-        /* Store position relative to image world (screen pos - offset) / scale at save time */
         new_obj->virtual_x = ((float)min_x - g_offset_x) / g_scale;
         new_obj->virtual_y = ((float)min_y - g_offset_y) / g_scale;
         new_obj->scale_at_save = g_scale;
@@ -2873,16 +2888,15 @@ void do_double_buffered_paint(HWND hWnd) {
     HDC hdc;
     
     hdc = BeginPaint(hWnd, &ps);
-    EndPaint(hWnd, &ps);
 
     if (g_render_mode == 1) {
-        render_opengl(hWnd);
+        render_opengl(hWnd); 
     } else {
         render_framebuffer(hWnd);
     }
     
-    /* Bounding box drawing is only handled separately in software mode.
-       In OpenGL mode, it is rendered directly inside render_opengl. */
+    EndPaint(hWnd, &ps);
+
     if (g_selected_object_index != -1 && !g_is_drawing_mode && g_render_mode == 0) {
         const SavedDrawingObject *obj = &g_saved_drawings[g_selected_object_index];
         int draw_w = (int)((float)obj->w * (g_scale / obj->scale_at_save));
@@ -2903,4 +2917,3 @@ void do_double_buffered_paint(HWND hWnd) {
         ReleaseDC(hWnd, hdc_screen);
     }
 }
-/* --- END OF FUNCTIONS THAT WERE IMPLICITLY DECLARED --- */
