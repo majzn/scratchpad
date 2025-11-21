@@ -1,2 +1,2 @@
 @echo off
-gcc view.c -o view -lws2_32 -lwininet -lgdi32 -lmsimg32
+gcc -o %1 view.c -lws2_32 -lwininet -luser32 -lgdi32 -lshell32 -lcomdlg32 -lcomctl32 -lm

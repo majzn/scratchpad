@@ -1,0 +1,2029 @@
+#ifndef INCLUDE_PNGL
+#define INCLUDE_PNGL
+
+typedef unsigned char pngl_uc;
+typedef unsigned short pngl_us;
+typedef unsigned int _pngl_uint32;
+
+enum {
+  PNGL_default = 0,
+  PNGL_grey = 1,
+  PNGL_grey_alpha = 2,
+  PNGL_rgb = 3,
+  PNGL_rgb_alpha = 4
+};
+
+enum { PNGL_ORDER_RGB, PNGL_ORDER_BGR };
+
+typedef struct {
+  int (*read)(void *user, char *data, int size);
+  void (*skip)(void *user, int n);
+  int (*eof)(void *user);
+} pngl_io_callbacks;
+
+#ifndef PNGLDEF
+#ifdef PNGL_STATIC
+#define PNGLDEF static
+#else
+#ifdef __cplusplus
+#define PNGLDEF extern "C"
+#else
+#define PNGLDEF extern
+#endif
+#endif
+#endif
+
+PNGLDEF pngl_uc *pngl_load_from_memory(pngl_uc const *buffer, int len, int *x,
+                                       int *y, int *comp, int req_comp);
+
+PNGLDEF pngl_uc *pngl_load_from_callbacks(pngl_io_callbacks const *clbk,
+                                          void *user, int *x, int *y, int *comp,
+                                          int req_comp);
+
+PNGLDEF void pngl_image_free(void *retval_from_pngl_load);
+
+PNGLDEF const char *pngl_failure_reason(void);
+
+PNGLDEF void pngl_set_flip_vertically_on_load(int flag_true_if_should_flip);
+
+#ifdef PNGL_IMPLEMENTATION
+
+#include <stdlib.h>
+#include <string.h>
+
+static const char *_pngl_g_failure_reason = 0;
+
+typedef struct {
+  _pngl_uint32 img_x, img_y;
+  int img_n, img_out_n;
+  pngl_io_callbacks io;
+  void *io_user_data;
+  int read_from_callbacks;
+  int buflen;
+  pngl_uc buffer_start[128];
+  int callback_already_read;
+  pngl_uc *img_buffer, *img_buffer_end;
+  pngl_uc *img_buffer_original, *img_buffer_original_end;
+} _pngl_context;
+
+typedef struct {
+  int bits_per_channel;
+  int num_channels;
+  int channel_order;
+} _pngl_result_info;
+
+typedef struct {
+  pngl_us fast[1 << 9];
+  pngl_us firstcode[16];
+  int maxcode[17];
+  pngl_us firstsymbol[16];
+  pngl_uc size[288];
+  pngl_us value[288];
+} _pngl_zhuffman;
+
+typedef struct {
+  pngl_uc *zbuffer, *zbuffer_end;
+  int num_bits;
+  int hit_zeof_once;
+  _pngl_uint32 code_buffer;
+  char *zout;
+  char *zout_start;
+  char *zout_end;
+  int z_expandable;
+  _pngl_zhuffman z_length, z_distance;
+} _pngl_zbuf;
+
+typedef struct {
+  _pngl_uint32 length;
+  _pngl_uint32 type;
+} _pngl_pngchunk;
+
+typedef struct {
+  _pngl_context *s;
+  pngl_uc *idata, *expanded, *out;
+  int depth;
+} _pngl_png;
+
+enum {
+  PNGL__F_none = 0,
+  PNGL__F_sub = 1,
+  PNGL__F_up = 2,
+  PNGL__F_avg = 3,
+  PNGL__F_paeth = 4,
+  PNGL__F_avg_first
+};
+
+enum { PNGL__SCAN_load = 0, PNGL__SCAN_type, PNGL__SCAN_header };
+
+static int _pngl_unpremultiply_on_load_global = 0;
+static int _pngl_de_iphone_flag_global = 0;
+static int _pngl_vertically_flip_on_load_global = 0;
+
+static int _pngl_unpremultiply_on_load_local = 0;
+static int _pngl_unpremultiply_on_load_set = 0;
+static int _pngl_de_iphone_flag_local = 0;
+static int _pngl_de_iphone_flag_set = 0;
+static int _pngl_vertically_flip_on_load_local = 0;
+static int _pngl_vertically_flip_on_load_set = 0;
+
+static int _pngl_err(const char *str) {
+  _pngl_g_failure_reason = str;
+  return 0;
+}
+
+static void *_pngl_malloc(size_t size) { return malloc(size); }
+
+static int _pngl_addsizes_valid(int a, int b) {
+  if (b < 0)
+    return 0;
+  return a <= 0x7fffffff - b;
+}
+
+static int _pngl_mul2sizes_valid(int a, int b) {
+  if (a < 0 || b < 0)
+    return 0;
+  if (b == 0)
+    return 1;
+  return a <= 0x7fffffff / b;
+}
+
+static int _pngl_mad2sizes_valid(int a, int b, int add) {
+  return _pngl_mul2sizes_valid(a, b) && _pngl_addsizes_valid(a * b, add);
+}
+
+static int _pngl_mad3sizes_valid(int a, int b, int c, int add) {
+  if (!_pngl_mul2sizes_valid(a, b))
+    return 0;
+  if (!_pngl_mul2sizes_valid(a * b, c))
+    return 0;
+  return _pngl_addsizes_valid(a * b * c, add);
+}
+
+static void *_pngl_malloc_mad2(int a, int b, int add) {
+  if (!_pngl_mad2sizes_valid(a, b, add))
+    return 0;
+  return _pngl_malloc((size_t)a * b + add);
+}
+
+static void *_pngl_malloc_mad3(int a, int b, int c, int add) {
+  if (!_pngl_mad3sizes_valid(a, b, c, add))
+    return 0;
+  return _pngl_malloc((size_t)a * b * c + add);
+}
+
+static void _pngl_refill_buffer(_pngl_context *s) {
+  int n = (s->io.read)(s->io_user_data, (char *)s->buffer_start, s->buflen);
+  s->callback_already_read += (int)(s->img_buffer - s->img_buffer_original);
+  if (n == 0) {
+    s->read_from_callbacks = 0;
+    s->img_buffer = s->buffer_start;
+    s->img_buffer_end = s->buffer_start + 1;
+    *s->img_buffer = 0;
+  } else {
+    s->img_buffer = s->buffer_start;
+    s->img_buffer_end = s->buffer_start + n;
+  }
+}
+
+static pngl_uc _pngl_get8(_pngl_context *s) {
+  if (s->img_buffer < s->img_buffer_end)
+    return *s->img_buffer++;
+  if (s->read_from_callbacks) {
+    _pngl_refill_buffer(s);
+    return *s->img_buffer++;
+  }
+  return 0;
+}
+
+static void _pngl_skip(_pngl_context *s, int n) {
+  if (n == 0)
+    return;
+  if (n < 0) {
+    s->img_buffer = s->img_buffer_end;
+    return;
+  }
+  if (s->io.read) {
+    int blen = (int)(s->img_buffer_end - s->img_buffer);
+    if (blen < n) {
+      s->img_buffer = s->img_buffer_end;
+      (s->io.skip)(s->io_user_data, n - blen);
+      return;
+    }
+  }
+  s->img_buffer += n;
+}
+
+static int _pngl_getn(_pngl_context *s, pngl_uc *buffer, int n) {
+  if (s->io.read) {
+    int blen = (int)(s->img_buffer_end - s->img_buffer);
+    if (blen < n) {
+      int count;
+      memcpy(buffer, s->img_buffer, blen);
+      count = (s->io.read)(s->io_user_data, (char *)buffer + blen, n - blen);
+      s->img_buffer = s->img_buffer_end;
+      return (count == (n - blen));
+    }
+  }
+  if (s->img_buffer + n <= s->img_buffer_end) {
+    memcpy(buffer, s->img_buffer, n);
+    s->img_buffer += n;
+    return 1;
+  } else
+    return 0;
+}
+
+static int _pngl_get16be(_pngl_context *s) {
+  int z = _pngl_get8(s);
+  return (z << 8) + _pngl_get8(s);
+}
+
+static _pngl_uint32 _pngl_get32be(_pngl_context *s) {
+  _pngl_uint32 z = (_pngl_uint32)_pngl_get16be(s);
+  return (z << 16) + _pngl_get16be(s);
+}
+
+static void _pngl_rewind(_pngl_context *s) {
+  s->img_buffer = s->img_buffer_original;
+  s->img_buffer_end = s->img_buffer_original_end;
+}
+
+static void _pngl_start_mem(_pngl_context *s, pngl_uc const *buffer, int len) {
+  s->io.read = 0;
+  s->read_from_callbacks = 0;
+  s->callback_already_read = 0;
+  s->img_buffer = s->img_buffer_original = (pngl_uc *)buffer;
+  s->img_buffer_end = s->img_buffer_original_end = (pngl_uc *)buffer + len;
+}
+
+static void _pngl_start_callbacks(_pngl_context *s, pngl_io_callbacks *c,
+                                  void *user) {
+  s->io = *c;
+  s->io_user_data = user;
+  s->buflen = sizeof(s->buffer_start);
+  s->read_from_callbacks = 1;
+  s->callback_already_read = 0;
+  s->img_buffer = s->img_buffer_original = s->buffer_start;
+  _pngl_refill_buffer(s);
+  s->img_buffer_original_end = s->img_buffer_end;
+}
+
+static pngl_uc _pngl_compute_y(int r, int g, int b) {
+  return (pngl_uc)(((r * 77) + (g * 150) + (29 * b)) >> 8);
+}
+
+static unsigned char *_pngl_convert_format(unsigned char *data, int img_n,
+                                           int req_comp, unsigned int x,
+                                           unsigned int y) {
+  int i, j;
+  unsigned char *good;
+  if (req_comp == img_n)
+    return data;
+
+  good = (unsigned char *)_pngl_malloc_mad3(req_comp, (int)x, (int)y, 0);
+  if (good == 0) {
+    free(data);
+    return (unsigned char *)(size_t)(_pngl_err("outofmem") ? 0 : 0);
+  }
+
+  for (j = 0; j < (int)y; ++j) {
+    unsigned char *src = data + j * x * img_n;
+    unsigned char *dest = good + j * x * req_comp;
+    switch (((img_n) * 8 + (req_comp))) {
+    case ((1) * 8 + (2)):
+      for (i = (int)x - 1; i >= 0; --i, src += 1, dest += 2) {
+        dest[0] = src[0];
+        dest[1] = 255;
+      }
+      break;
+    case ((1) * 8 + (3)):
+      for (i = (int)x - 1; i >= 0; --i, src += 1, dest += 3) {
+        dest[0] = dest[1] = dest[2] = src[0];
+      }
+      break;
+    case ((1) * 8 + (4)):
+      for (i = (int)x - 1; i >= 0; --i, src += 1, dest += 4) {
+        dest[0] = dest[1] = dest[2] = src[0];
+        dest[3] = 255;
+      }
+      break;
+    case ((2) * 8 + (1)):
+      for (i = (int)x - 1; i >= 0; --i, src += 2, dest += 1) {
+        dest[0] = src[0];
+      }
+      break;
+    case ((2) * 8 + (3)):
+      for (i = (int)x - 1; i >= 0; --i, src += 2, dest += 3) {
+        dest[0] = dest[1] = dest[2] = src[0];
+      }
+      break;
+    case ((2) * 8 + (4)):
+      for (i = (int)x - 1; i >= 0; --i, src += 2, dest += 4) {
+        dest[0] = dest[1] = dest[2] = src[0];
+        dest[3] = src[1];
+      }
+      break;
+    case ((3) * 8 + (4)):
+      for (i = (int)x - 1; i >= 0; --i, src += 3, dest += 4) {
+        dest[0] = src[0];
+        dest[1] = src[1];
+        dest[2] = src[2];
+        dest[3] = 255;
+      }
+      break;
+    case ((3) * 8 + (1)):
+      for (i = (int)x - 1; i >= 0; --i, src += 3, dest += 1) {
+        dest[0] = _pngl_compute_y(src[0], src[1], src[2]);
+      }
+      break;
+    case ((3) * 8 + (2)):
+      for (i = (int)x - 1; i >= 0; --i, src += 3, dest += 2) {
+        dest[0] = _pngl_compute_y(src[0], src[1], src[2]);
+        dest[1] = 255;
+      }
+      break;
+    case ((4) * 8 + (1)):
+      for (i = (int)x - 1; i >= 0; --i, src += 4, dest += 1) {
+        dest[0] = _pngl_compute_y(src[0], src[1], src[2]);
+      }
+      break;
+    case ((4) * 8 + (2)):
+      for (i = (int)x - 1; i >= 0; --i, src += 4, dest += 2) {
+        dest[0] = _pngl_compute_y(src[0], src[1], src[2]);
+        dest[1] = src[3];
+      }
+      break;
+    case ((4) * 8 + (3)):
+      for (i = (int)x - 1; i >= 0; --i, src += 4, dest += 3) {
+        dest[0] = src[0];
+        dest[1] = src[1];
+        dest[2] = src[2];
+      }
+      break;
+    default:
+      free(data);
+      free(good);
+      return (unsigned char *)(size_t)(_pngl_err("unsupported") ? 0 : 0);
+    }
+  }
+  free(data);
+  return good;
+}
+
+static void _pngl_vertical_flip(void *image, int w, int h,
+                                int bytes_per_pixel) {
+  int row;
+  size_t bytes_per_row = (size_t)w * bytes_per_pixel;
+  pngl_uc temp[2048];
+  pngl_uc *bytes = (pngl_uc *)image;
+  for (row = 0; row < (h >> 1); row++) {
+    pngl_uc *row0 = bytes + row * bytes_per_row;
+    pngl_uc *row1 = bytes + (h - row - 1) * bytes_per_row;
+    size_t bytes_left = bytes_per_row;
+    while (bytes_left) {
+      size_t bytes_copy =
+          (bytes_left < sizeof(temp)) ? bytes_left : sizeof(temp);
+      memcpy(temp, row0, bytes_copy);
+      memcpy(row0, row1, bytes_copy);
+      memcpy(row1, temp, bytes_copy);
+      row0 += bytes_copy;
+      row1 += bytes_copy;
+      bytes_left -= bytes_copy;
+    }
+  }
+}
+
+static int _pngl_bitreverse16(int n) {
+  n = ((n & 0xAAAA) >> 1) | ((n & 0x5555) << 1);
+  n = ((n & 0xCCCC) >> 2) | ((n & 0x3333) << 2);
+  n = ((n & 0xF0F0) >> 4) | ((n & 0x0F0F) << 4);
+  n = ((n & 0xFF00) >> 8) | ((n & 0x00FF) << 8);
+  return n;
+}
+
+static int _pngl_bit_reverse(int v, int bits) {
+  return _pngl_bitreverse16(v) >> (16 - bits);
+}
+
+static int _pngl_zbuild_huffman(_pngl_zhuffman *z, const pngl_uc *sizelist,
+                                int num) {
+  int i, k = 0;
+  int code, next_code[16], sizes[17];
+  memset(sizes, 0, sizeof(sizes));
+  memset(z->fast, 0, sizeof(z->fast));
+  for (i = 0; i < num; ++i)
+    ++sizes[sizelist[i]];
+  sizes[0] = 0;
+  for (i = 1; i < 16; ++i)
+    if (sizes[i] > (1 << i))
+      return _pngl_err("bad sizes");
+  code = 0;
+  for (i = 1; i < 16; ++i) {
+    next_code[i] = code;
+    z->firstcode[i] = (pngl_us)code;
+    z->firstsymbol[i] = (pngl_us)k;
+    code = (code + sizes[i]);
+    if (sizes[i])
+      if (code - 1 >= (1 << i))
+        return _pngl_err("bad codelengths");
+    z->maxcode[i] = code << (16 - i);
+    code <<= 1;
+    k += sizes[i];
+  }
+  z->maxcode[16] = 0x10000;
+  for (i = 0; i < num; ++i) {
+    int s = sizelist[i];
+    if (s) {
+      int c = next_code[s] - z->firstcode[s] + z->firstsymbol[s];
+      pngl_us fastv = (pngl_us)((s << 9) | i);
+      z->size[c] = (pngl_uc)s;
+      z->value[c] = (pngl_us)i;
+      if (s <= 9) {
+        int j = _pngl_bit_reverse(next_code[s], s);
+        while (j < (1 << 9)) {
+          z->fast[j] = fastv;
+          j += (1 << s);
+        }
+      }
+      ++next_code[s];
+    }
+  }
+  return 1;
+}
+
+static int _pngl_zeof(_pngl_zbuf *z) { return (z->zbuffer >= z->zbuffer_end); }
+
+static pngl_uc _pngl_zget8(_pngl_zbuf *z) {
+  return _pngl_zeof(z) ? 0 : *z->zbuffer++;
+}
+
+static void _pngl_fill_bits(_pngl_zbuf *z) {
+  do {
+    if (z->code_buffer >= (1U << z->num_bits)) {
+      z->zbuffer = z->zbuffer_end;
+      return;
+    }
+    z->code_buffer |= (unsigned int)_pngl_zget8(z) << z->num_bits;
+    z->num_bits += 8;
+  } while (z->num_bits <= 24);
+}
+
+static unsigned int _pngl_zreceive(_pngl_zbuf *z, int n) {
+  unsigned int k;
+  if (z->num_bits < n)
+    _pngl_fill_bits(z);
+  k = z->code_buffer & ((1 << n) - 1);
+  z->code_buffer >>= n;
+  z->num_bits -= n;
+  return k;
+}
+
+static int _pngl_zhuffman_decode_slowpath(_pngl_zbuf *a, _pngl_zhuffman *z) {
+  int b, s, k;
+  k = _pngl_bit_reverse(a->code_buffer, 16);
+  for (s = 9 + 1;; ++s)
+    if (k < z->maxcode[s])
+      break;
+  if (s >= 16)
+    return -1;
+  b = (k >> (16 - s)) - z->firstcode[s] + z->firstsymbol[s];
+  if (b >= 288)
+    return -1;
+  if (z->size[b] != s)
+    return -1;
+  a->code_buffer >>= s;
+  a->num_bits -= s;
+  return z->value[b];
+}
+
+static int _pngl_zhuffman_decode(_pngl_zbuf *a, _pngl_zhuffman *z) {
+  int b, s;
+  if (a->num_bits < 16) {
+    if (_pngl_zeof(a)) {
+      if (!a->hit_zeof_once) {
+        a->hit_zeof_once = 1;
+        a->num_bits += 16;
+      } else {
+        return -1;
+      }
+    } else {
+      _pngl_fill_bits(a);
+    }
+  }
+  b = z->fast[a->code_buffer & ((1 << 9) - 1)];
+  if (b) {
+    s = b >> 9;
+    a->code_buffer >>= s;
+    a->num_bits -= s;
+    return b & 511;
+  }
+  return _pngl_zhuffman_decode_slowpath(a, z);
+}
+
+static int _pngl_zexpand(_pngl_zbuf *z, char *zout, int n) {
+  char *q;
+  unsigned int cur, limit;
+  z->zout = zout;
+  if (!z->z_expandable)
+    return _pngl_err("output buffer limit");
+  cur = (unsigned int)(zout - z->zout_start);
+  limit = (unsigned int)(z->zout_end - z->zout_start);
+  if (0x7fffffff - cur < (unsigned)n)
+    return _pngl_err("outofmem");
+  while (cur + n > limit) {
+    if (limit > 0x7fffffff / 2)
+      return _pngl_err("outofmem");
+    limit *= 2;
+  }
+  q = (char *)realloc(z->zout_start, limit);
+  if (q == 0)
+    return _pngl_err("outofmem");
+  z->zout_start = q;
+  z->zout = q + cur;
+  z->zout_end = q + limit;
+  return 1;
+}
+
+static const int _pngl_zlength_base[31] = {
+    3,  4,  5,  6,  7,  8,  9,  10,  11,  13,  15,  17,  19,  23, 27, 31,
+    35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258, 0,  0};
+static const int _pngl_zlength_extra[31] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1,
+                                            1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4,
+                                            4, 4, 5, 5, 5, 5, 0, 0, 0};
+static const int _pngl_zdist_base[32] = {
+    1,    2,    3,    4,    5,    7,     9,     13,    17,  25,   33,
+    49,   65,   97,   129,  193,  257,   385,   513,   769, 1025, 1537,
+    2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577, 0,   0};
+static const int _pngl_zdist_extra[32] = {0, 0, 0,  0,  1,  1,  2,  2,  3,  3,
+                                          4, 4, 5,  5,  6,  6,  7,  7,  8,  8,
+                                          9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
+
+static int _pngl_parse_huffman_block(_pngl_zbuf *a) {
+  char *zout = a->zout;
+  for (;;) {
+    int z = _pngl_zhuffman_decode(a, &a->z_length);
+    if (z < 256) {
+      if (z < 0)
+        return _pngl_err("bad huffman code");
+      if (zout >= a->zout_end) {
+        if (!_pngl_zexpand(a, zout, 1))
+          return 0;
+        zout = a->zout;
+      }
+      *zout++ = (char)z;
+    } else {
+      pngl_uc *p;
+      int len, dist;
+      if (z == 256) {
+        a->zout = zout;
+        if (a->hit_zeof_once && a->num_bits < 16) {
+          return _pngl_err("unexpected end");
+        }
+        return 1;
+      }
+      if (z >= 286)
+        return _pngl_err("bad huffman code");
+      z -= 257;
+      len = _pngl_zlength_base[z];
+      if (_pngl_zlength_extra[z])
+        len += (int)_pngl_zreceive(a, _pngl_zlength_extra[z]);
+      z = _pngl_zhuffman_decode(a, &a->z_distance);
+      if (z < 0 || z >= 30)
+        return _pngl_err("bad huffman code");
+      dist = _pngl_zdist_base[z];
+      if (_pngl_zdist_extra[z])
+        dist += (int)_pngl_zreceive(a, _pngl_zdist_extra[z]);
+      if (zout - a->zout_start < dist)
+        return _pngl_err("bad dist");
+      if (len > a->zout_end - zout) {
+        if (!_pngl_zexpand(a, zout, len))
+          return 0;
+        zout = a->zout;
+      }
+      p = (pngl_uc *)(zout - dist);
+      if (dist == 1) {
+        pngl_uc v = *p;
+        if (len) {
+          do
+            *zout++ = (char)v;
+          while (--len);
+        }
+      } else {
+        if (len) {
+          do
+            *zout++ = *p++;
+          while (--len);
+        }
+      }
+    }
+  }
+}
+
+static int _pngl_compute_huffman_codes(_pngl_zbuf *a) {
+  static const pngl_uc length_dezigzag[19] = {
+      16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
+  _pngl_zhuffman z_codelength;
+  pngl_uc lencodes[286 + 32 + 137];
+  pngl_uc codelength_sizes[19];
+  int i, n;
+  int hlit = (int)_pngl_zreceive(a, 5) + 257;
+  int hdist = (int)_pngl_zreceive(a, 5) + 1;
+  int hclen = (int)_pngl_zreceive(a, 4) + 4;
+  int ntot = hlit + hdist;
+  memset(codelength_sizes, 0, sizeof(codelength_sizes));
+  for (i = 0; i < hclen; ++i) {
+    int s = (int)_pngl_zreceive(a, 3);
+    codelength_sizes[length_dezigzag[i]] = (pngl_uc)s;
+  }
+  if (!_pngl_zbuild_huffman(&z_codelength, codelength_sizes, 19))
+    return 0;
+  n = 0;
+  while (n < ntot) {
+    int c = _pngl_zhuffman_decode(a, &z_codelength);
+    if (c < 0 || c >= 19)
+      return _pngl_err("bad codelengths");
+    if (c < 16)
+      lencodes[n++] = (pngl_uc)c;
+    else {
+      int c_len;
+      pngl_uc fill = 0;
+      if (c == 16) {
+        c_len = (int)_pngl_zreceive(a, 2) + 3;
+        if (n == 0)
+          return _pngl_err("bad codelengths");
+        fill = lencodes[n - 1];
+      } else if (c == 17) {
+        c_len = (int)_pngl_zreceive(a, 3) + 3;
+      } else if (c == 18) {
+        c_len = (int)_pngl_zreceive(a, 7) + 11;
+      } else {
+        return _pngl_err("bad codelengths");
+      }
+      if (ntot - n < c_len)
+        return _pngl_err("bad codelengths");
+      memset(lencodes + n, fill, c_len);
+      n += c_len;
+    }
+  }
+  if (n != ntot)
+    return _pngl_err("bad codelengths");
+  if (!_pngl_zbuild_huffman(&a->z_length, lencodes, hlit))
+    return 0;
+  if (!_pngl_zbuild_huffman(&a->z_distance, lencodes + hlit, hdist))
+    return 0;
+  return 1;
+}
+
+static int _pngl_parse_uncompressed_block(_pngl_zbuf *a) {
+  pngl_uc header[4];
+  int len, nlen, k;
+  if (a->num_bits & 7)
+    _pngl_zreceive(a, a->num_bits & 7);
+  k = 0;
+  while (a->num_bits > 0) {
+    header[k++] = (pngl_uc)(a->code_buffer & 255);
+    a->code_buffer >>= 8;
+    a->num_bits -= 8;
+  }
+  if (a->num_bits < 0)
+    return _pngl_err("zlib corrupt");
+  while (k < 4)
+    header[k++] = _pngl_zget8(a);
+  len = header[1] * 256 + header[0];
+  nlen = header[3] * 256 + header[2];
+  if (nlen != (len ^ 0xffff))
+    return _pngl_err("zlib corrupt");
+  if (a->zbuffer + len > a->zbuffer_end)
+    return _pngl_err("read past buffer");
+  if (a->zout + len > a->zout_end)
+    if (!_pngl_zexpand(a, a->zout, len))
+      return 0;
+  memcpy(a->zout, a->zbuffer, len);
+  a->zbuffer += len;
+  a->zout += len;
+  return 1;
+}
+
+static int _pngl_parse_zlib_header(_pngl_zbuf *a) {
+  int cmf = _pngl_zget8(a);
+  int cm = cmf & 15;
+  int flg = _pngl_zget8(a);
+  if (_pngl_zeof(a))
+    return _pngl_err("bad zlib header");
+  if ((cmf * 256 + flg) % 31 != 0)
+    return _pngl_err("bad zlib header");
+  if (flg & 32)
+    return _pngl_err("no preset dict");
+  if (cm != 8)
+    return _pngl_err("bad compression");
+  return 1;
+}
+
+static const pngl_uc _pngl_zdefault_length[288] = {
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8};
+static const pngl_uc _pngl_zdefault_distance[32] = {
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5};
+
+static int _pngl_parse_zlib(_pngl_zbuf *a, int parse_header) {
+  int final, type;
+  if (parse_header)
+    if (!_pngl_parse_zlib_header(a))
+      return 0;
+  a->num_bits = 0;
+  a->code_buffer = 0;
+  a->hit_zeof_once = 0;
+  do {
+    final = (int)_pngl_zreceive(a, 1);
+    type = (int)_pngl_zreceive(a, 2);
+    if (type == 0) {
+      if (!_pngl_parse_uncompressed_block(a))
+        return 0;
+    } else if (type == 3) {
+      return 0;
+    } else {
+      if (type == 1) {
+        if (!_pngl_zbuild_huffman(&a->z_length, _pngl_zdefault_length, 288))
+          return 0;
+        if (!_pngl_zbuild_huffman(&a->z_distance, _pngl_zdefault_distance, 32))
+          return 0;
+      } else {
+        if (!_pngl_compute_huffman_codes(a))
+          return 0;
+      }
+      if (!_pngl_parse_huffman_block(a))
+        return 0;
+    }
+  } while (!final);
+  return 1;
+}
+
+static int _pngl_do_zlib(_pngl_zbuf *a, char *obuf, int olen, int exp,
+                         int parse_header) {
+  a->zout_start = obuf;
+  a->zout = obuf;
+  a->zout_end = obuf + olen;
+  a->z_expandable = exp;
+  return _pngl_parse_zlib(a, parse_header);
+}
+
+static char *pngl_zlib_decode_malloc_guesssize_headerflag(const char *buffer,
+                                                          int len,
+                                                          int initial_size,
+                                                          int *outlen,
+                                                          int parse_header) {
+  _pngl_zbuf a;
+  char *p = (char *)_pngl_malloc(initial_size);
+  if (p == 0)
+    return 0;
+  a.zbuffer = (pngl_uc *)buffer;
+  a.zbuffer_end = (pngl_uc *)buffer + len;
+  if (_pngl_do_zlib(&a, p, initial_size, 1, parse_header)) {
+    if (outlen)
+      *outlen = (int)(a.zout - a.zout_start);
+    return a.zout_start;
+  } else {
+    free(a.zout_start);
+    return 0;
+  }
+}
+
+static _pngl_pngchunk _pngl_get_chunk_header(_pngl_context *s) {
+  _pngl_pngchunk c;
+  c.length = _pngl_get32be(s);
+  c.type = _pngl_get32be(s);
+  return c;
+}
+
+static int _pngl_check_png_header(_pngl_context *s) {
+  static const pngl_uc png_sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+  int i;
+  for (i = 0; i < 8; ++i)
+    if (_pngl_get8(s) != png_sig[i])
+      return _pngl_err("bad png sig");
+  return 1;
+}
+
+static int _pngl_paeth(int a, int b, int c) {
+  int p = a + b - c;
+  int pa = (p < a) ? (a - p) : (p - a);
+  int pb = (p < b) ? (b - p) : (p - b);
+  int pc = (p < c) ? (c - p) : (p - c);
+  if (pa <= pb && pa <= pc)
+    return a;
+  if (pb <= pc)
+    return b;
+  return c;
+}
+
+static const pngl_uc _pngl_depth_scale_table[9] = {0, 0xff, 0x55, 0,   0x11,
+                                                   0, 0,    0,    0x01};
+
+static void _pngl_create_png_alpha_expand8(pngl_uc *dest, pngl_uc *src,
+                                           _pngl_uint32 x, int img_n) {
+  int i;
+  if (img_n == 1) {
+    for (i = (int)x - 1; i >= 0; --i) {
+      dest[i * 2 + 1] = 255;
+      dest[i * 2 + 0] = src[i];
+    }
+  } else {
+    for (i = (int)x - 1; i >= 0; --i) {
+      dest[i * 4 + 3] = 255;
+      dest[i * 4 + 2] = src[i * 3 + 2];
+      dest[i * 4 + 1] = src[i * 3 + 1];
+      dest[i * 4 + 0] = src[i * 3 + 0];
+    }
+  }
+}
+
+static int _pngl_create_png_image_raw(_pngl_png *a, pngl_uc *raw,
+                                      _pngl_uint32 raw_len, int out_n,
+                                      _pngl_uint32 x, _pngl_uint32 y, int depth,
+                                      int color) {
+  int bytes = 1;
+  _pngl_context *s = a->s;
+  _pngl_uint32 i, j, stride = x * out_n * bytes;
+  _pngl_uint32 img_len, img_width_bytes;
+  pngl_uc *filter_buf;
+  int all_ok = 1;
+  int k;
+  int img_n = s->img_n;
+  int output_bytes = out_n * bytes;
+  int filter_bytes = img_n * bytes;
+  int width = (int)x;
+  pngl_uc first_row_filter[5] = {PNGL__F_none, PNGL__F_sub, PNGL__F_none,
+                                 PNGL__F_avg_first, PNGL__F_sub};
+
+  if (depth != 8 && depth != 4 && depth != 2 && depth != 1) {
+    return _pngl_err("unsupported bit depth");
+  }
+
+  a->out = (pngl_uc *)_pngl_malloc_mad3((int)x, (int)y, output_bytes, 0);
+  if (!a->out)
+    return _pngl_err("outofmem");
+  if (!_pngl_mad3sizes_valid(img_n, (int)x, depth, 7))
+    return _pngl_err("too large");
+  img_width_bytes = (((img_n * x * depth) + 7) >> 3);
+  if (!_pngl_mad2sizes_valid((int)img_width_bytes, (int)y,
+                             (int)img_width_bytes))
+    return _pngl_err("too large");
+  img_len = (img_width_bytes + 1) * y;
+  if (raw_len < img_len)
+    return _pngl_err("not enough pixels");
+
+  filter_buf = (pngl_uc *)_pngl_malloc_mad2((int)img_width_bytes, 2, 0);
+  if (!filter_buf)
+    return _pngl_err("outofmem");
+
+  if (depth < 8) {
+    filter_bytes = 1;
+    width = (int)img_width_bytes;
+  }
+
+  for (j = 0; (int)j < (int)y; ++j) {
+    pngl_uc *cur = filter_buf + (j & 1) * img_width_bytes;
+    pngl_uc *prior = filter_buf + (~j & 1) * img_width_bytes;
+    pngl_uc *dest = a->out + stride * j;
+    int nk = width * filter_bytes;
+    int filter = *raw++;
+    if (filter > 4) {
+      all_ok = _pngl_err("invalid filter");
+      break;
+    }
+    if (j == 0)
+      filter = first_row_filter[filter];
+
+    switch (filter) {
+    case PNGL__F_none:
+      memcpy(cur, raw, nk);
+      break;
+    case PNGL__F_sub:
+      memcpy(cur, raw, filter_bytes);
+      for (k = filter_bytes; k < nk; ++k)
+        cur[k] = (pngl_uc)(raw[k] + cur[k - filter_bytes]);
+      break;
+    case PNGL__F_up:
+      for (k = 0; k < nk; ++k)
+        cur[k] = (pngl_uc)(raw[k] + prior[k]);
+      break;
+    case PNGL__F_avg:
+      for (k = 0; k < filter_bytes; ++k)
+        cur[k] = (pngl_uc)(raw[k] + (prior[k] >> 1));
+      for (k = filter_bytes; k < nk; ++k)
+        cur[k] = (pngl_uc)(raw[k] + ((prior[k] + cur[k - filter_bytes]) >> 1));
+      break;
+    case PNGL__F_paeth:
+      for (k = 0; k < filter_bytes; ++k)
+        cur[k] = (pngl_uc)(raw[k] + prior[k]);
+      for (k = filter_bytes; k < nk; ++k)
+        cur[k] = (pngl_uc)(raw[k] + _pngl_paeth(cur[k - filter_bytes], prior[k],
+                                                prior[k - filter_bytes]));
+      break;
+    case PNGL__F_avg_first:
+      memcpy(cur, raw, filter_bytes);
+      for (k = filter_bytes; k < nk; ++k)
+        cur[k] = (pngl_uc)(raw[k] + (cur[k - filter_bytes] >> 1));
+      break;
+    }
+    raw += nk;
+    if (depth < 8) {
+      pngl_uc scale = (color == 0) ? _pngl_depth_scale_table[depth] : 1;
+      pngl_uc *in = cur;
+      pngl_uc *out = dest;
+      pngl_uc inb = 0;
+      _pngl_uint32 nsmp = x * img_n;
+      if (depth == 4) {
+        for (i = 0; i < nsmp; ++i) {
+          if ((i & 1) == 0)
+            inb = *in++;
+          *out++ = (pngl_uc)(scale * (inb >> 4));
+          inb <<= 4;
+        }
+      } else if (depth == 2) {
+        for (i = 0; i < nsmp; ++i) {
+          if ((i & 3) == 0)
+            inb = *in++;
+          *out++ = (pngl_uc)(scale * (inb >> 6));
+          inb <<= 2;
+        }
+      } else {
+        for (i = 0; i < nsmp; ++i) {
+          if ((i & 7) == 0)
+            inb = *in++;
+          *out++ = (pngl_uc)(scale * (inb >> 7));
+          inb <<= 1;
+        }
+      }
+      if (img_n != out_n)
+        _pngl_create_png_alpha_expand8(dest, dest, x, img_n);
+    } else if (depth == 8) {
+      if (img_n == out_n)
+        memcpy(dest, cur, x * img_n);
+      else
+        _pngl_create_png_alpha_expand8(dest, cur, x, img_n);
+    }
+  }
+  free(filter_buf);
+  if (!all_ok)
+    return 0;
+  return 1;
+}
+
+static int _pngl_create_png_image(_pngl_png *a, pngl_uc *image_data,
+                                  _pngl_uint32 image_data_len, int out_n,
+                                  int depth, int color, int interlaced) {
+  int bytes = 1;
+  int out_bytes = out_n * bytes;
+  pngl_uc *final;
+  int p;
+  if (!interlaced)
+    return _pngl_create_png_image_raw(a, image_data, image_data_len, out_n,
+                                      a->s->img_x, a->s->img_y, depth, color);
+
+  final = (pngl_uc *)_pngl_malloc_mad3((int)a->s->img_x, (int)a->s->img_y,
+                                       out_bytes, 0);
+  if (!final)
+    return _pngl_err("outofmem");
+
+  for (p = 0; p < 7; ++p) {
+    int xorig[] = {0, 4, 0, 2, 0, 1, 0};
+    int yorig[] = {0, 0, 4, 0, 2, 0, 1};
+    int xspc[] = {8, 8, 4, 4, 2, 2, 1};
+    int yspc[] = {8, 8, 8, 4, 4, 2, 2};
+    int i, j, x, y;
+    x = (a->s->img_x - xorig[p] + xspc[p] - 1) / xspc[p];
+    y = (a->s->img_y - yorig[p] + yspc[p] - 1) / yspc[p];
+    if (x && y) {
+      _pngl_uint32 img_len =
+          ((((a->s->img_n * (_pngl_uint32)x * depth) + 7) >> 3) + 1) *
+          (_pngl_uint32)y;
+      if (!_pngl_create_png_image_raw(a, image_data, image_data_len, out_n,
+                                      (_pngl_uint32)x, (_pngl_uint32)y, depth,
+                                      color)) {
+        free(final);
+        return 0;
+      }
+      for (j = 0; j < y; ++j) {
+        for (i = 0; i < x; ++i) {
+          int out_y = j * yspc[p] + yorig[p];
+          int out_x = i * xspc[p] + xorig[p];
+          if (out_y < (int)a->s->img_y && out_x < (int)a->s->img_x) {
+            memcpy(final + out_y * a->s->img_x * out_bytes + out_x * out_bytes,
+                   a->out + (j * x + i) * out_bytes, out_bytes);
+          }
+        }
+      }
+      free(a->out);
+      a->out = 0;
+      image_data += img_len;
+      image_data_len -= img_len;
+    }
+  }
+  a->out = final;
+  return 1;
+}
+
+static int _pngl_compute_transparency(_pngl_png *z, pngl_uc tc[3], int out_n) {
+  _pngl_context *s = z->s;
+  _pngl_uint32 i, pixel_count = s->img_x * s->img_y;
+  pngl_uc *p = z->out;
+
+  if (out_n == 2) {
+    for (i = 0; i < pixel_count; ++i) {
+      p[1] = (p[0] == tc[0] ? 0 : 255);
+      p += 2;
+    }
+  } else {
+    for (i = 0; i < pixel_count; ++i) {
+      if (p[0] == tc[0] && p[1] == tc[1] && p[2] == tc[2])
+        p[3] = 0;
+      p += 4;
+    }
+  }
+  return 1;
+}
+
+static int _pngl_expand_png_palette(_pngl_png *a, pngl_uc *palette, int len,
+                                    int pal_img_n) {
+  _pngl_uint32 i, pixel_count = a->s->img_x * a->s->img_y;
+  pngl_uc *p, *temp_out, *orig = a->out;
+
+  p = (pngl_uc *)_pngl_malloc_mad2((int)pixel_count, pal_img_n, 0);
+  if (p == 0)
+    return _pngl_err("outofmem");
+  temp_out = p;
+
+  if (pal_img_n == 3) {
+    for (i = 0; i < pixel_count; ++i) {
+      int n = orig[i] * 4;
+      p[0] = palette[n];
+      p[1] = palette[n + 1];
+      p[2] = palette[n + 2];
+      p += 3;
+    }
+  } else {
+    for (i = 0; i < pixel_count; ++i) {
+      int n = orig[i] * 4;
+      p[0] = palette[n];
+      p[1] = palette[n + 1];
+      p[2] = palette[n + 2];
+      p[3] = palette[n + 3];
+      p += 4;
+    }
+  }
+  free(a->out);
+  a->out = temp_out;
+  return 1;
+}
+
+static void _pngl_de_iphone(_pngl_png *z) {
+  _pngl_context *s = z->s;
+  _pngl_uint32 i, pixel_count = s->img_x * s->img_y;
+  pngl_uc *p = z->out;
+  int unpremultiply =
+      (_pngl_unpremultiply_on_load_set ? _pngl_unpremultiply_on_load_local
+                                       : _pngl_unpremultiply_on_load_global);
+
+  if (s->img_out_n == 3) {
+    for (i = 0; i < pixel_count; ++i) {
+      pngl_uc t = p[0];
+      p[0] = p[2];
+      p[2] = t;
+      p += 3;
+    }
+  } else {
+    if (unpremultiply) {
+      for (i = 0; i < pixel_count; ++i) {
+        pngl_uc a = p[3];
+        pngl_uc t = p[0];
+        if (a) {
+          pngl_uc half = a / 2;
+          p[0] = (pngl_uc)((p[2] * 255 + half) / a);
+          p[1] = (pngl_uc)((p[1] * 255 + half) / a);
+          p[2] = (pngl_uc)((t * 255 + half) / a);
+        } else {
+          p[0] = p[2];
+          p[2] = t;
+        }
+        p += 4;
+      }
+    } else {
+      for (i = 0; i < pixel_count; ++i) {
+        pngl_uc t = p[0];
+        p[0] = p[2];
+        p[2] = t;
+        p += 4;
+      }
+    }
+  }
+}
+
+static int _pngl_parse_png_file(_pngl_png *z, int scan, int req_comp) {
+  pngl_uc palette[1024], pal_img_n = 0;
+  pngl_uc has_trans = 0, tc[3] = {0};
+  _pngl_uint32 ioff = 0, idata_limit = 0, i, pal_len = 0;
+  int first = 1, k, interlace = 0, color = 0, is_iphone = 0;
+  _pngl_context *s = z->s;
+  _pngl_uint32 raw_len, bpl;
+
+  z->expanded = 0;
+  z->idata = 0;
+  z->out = 0;
+
+  if (!_pngl_check_png_header(s))
+    return 0;
+  if (scan == PNGL__SCAN_type)
+    return 1;
+
+  for (;;) {
+    _pngl_pngchunk c = _pngl_get_chunk_header(s);
+
+    if (c.type == (((unsigned)('I') << 24) + ((unsigned)('E') << 16) +
+                   ((unsigned)('N') << 8) + (unsigned)('D')))
+      break;
+
+    switch (c.type) {
+    case (((unsigned)('C') << 24) + ((unsigned)('g') << 16) +
+          ((unsigned)('B') << 8) + (unsigned)('I')):
+      is_iphone = 1;
+      _pngl_skip(s, (int)c.length);
+      break;
+    case (((unsigned)('I') << 24) + ((unsigned)('H') << 16) +
+          ((unsigned)('D') << 8) + (unsigned)('R')): {
+      int comp, filter;
+      if (!first)
+        return _pngl_err("multiple IHDR");
+      first = 0;
+      if (c.length != 13)
+        return _pngl_err("bad IHDR len");
+      s->img_x = _pngl_get32be(s);
+      s->img_y = _pngl_get32be(s);
+
+      z->depth = _pngl_get8(s);
+      if (z->depth != 1 && z->depth != 2 && z->depth != 4 && z->depth != 8)
+        return _pngl_err("1/2/4/8-bit only (16-bit removed)");
+      color = _pngl_get8(s);
+      if (color > 6)
+        return _pngl_err("bad ctype");
+      if (color & 1)
+        return _pngl_err("bad ctype");
+      comp = _pngl_get8(s);
+      if (comp)
+        return _pngl_err("bad comp method");
+      filter = _pngl_get8(s);
+      if (filter)
+        return _pngl_err("bad filter method");
+      interlace = _pngl_get8(s);
+      if (interlace > 1)
+        return _pngl_err("bad interlace method");
+
+      if (!s->img_x || !s->img_y)
+        return _pngl_err("0-pixel image");
+
+      if (color == 3) {
+        pal_img_n = 3;
+        s->img_n = 1;
+        if (0x7fffffff / s->img_x / 4 < s->img_y)
+          return _pngl_err("too large");
+      } else {
+        s->img_n = (color & 2 ? 3 : 1) + (color & 4 ? 1 : 0);
+        if (0x7fffffff / s->img_x / s->img_n < s->img_y)
+          return _pngl_err("too large");
+      }
+      break;
+    }
+    case (((unsigned)('P') << 24) + ((unsigned)('L') << 16) +
+          ((unsigned)('T') << 8) + (unsigned)('E')): {
+      if (first)
+        return _pngl_err("first not IHDR");
+      if (c.length > 256 * 3)
+        return _pngl_err("invalid PLTE");
+      pal_len = c.length / 3;
+      if (pal_len * 3 != c.length)
+        return _pngl_err("invalid PLTE");
+      for (i = 0; i < pal_len; ++i) {
+        palette[i * 4 + 0] = _pngl_get8(s);
+        palette[i * 4 + 1] = _pngl_get8(s);
+        palette[i * 4 + 2] = _pngl_get8(s);
+        palette[i * 4 + 3] = 255;
+      }
+      break;
+    }
+    case (((unsigned)('t') << 24) + ((unsigned)('R') << 16) +
+          ((unsigned)('N') << 8) + (unsigned)('S')): {
+      if (first)
+        return _pngl_err("first not IHDR");
+      if (z->idata)
+        return _pngl_err("tRNS after IDAT");
+      if (pal_img_n) {
+        if (scan == PNGL__SCAN_header) {
+          s->img_n = 4;
+          return 1;
+        }
+        if (pal_len == 0)
+          return _pngl_err("tRNS before PLTE");
+        if (c.length > pal_len)
+          return _pngl_err("bad tRNS len");
+        pal_img_n = 4;
+        for (i = 0; i < c.length; ++i)
+          palette[i * 4 + 3] = _pngl_get8(s);
+      } else {
+        if (!(s->img_n & 1))
+          return _pngl_err("tRNS with alpha");
+        if (c.length != (_pngl_uint32)s->img_n * 2)
+          return _pngl_err("bad tRNS len");
+        has_trans = 1;
+        if (scan == PNGL__SCAN_header) {
+          ++s->img_n;
+          return 1;
+        }
+        for (k = 0; k < s->img_n && k < 3; ++k)
+          tc[k] = (pngl_uc)(_pngl_get16be(s) & 255) *
+                  _pngl_depth_scale_table[z->depth];
+      }
+      break;
+    }
+    case (((unsigned)('I') << 24) + ((unsigned)('D') << 16) +
+          ((unsigned)('A') << 8) + (unsigned)('T')): {
+      if (first)
+        return _pngl_err("first not IHDR");
+      if (pal_img_n && !pal_len)
+        return _pngl_err("no PLTE");
+      if (scan == PNGL__SCAN_header) {
+        if (pal_img_n)
+          s->img_n = pal_img_n;
+        return 1;
+      }
+      if (c.length > (1U << 30))
+        return _pngl_err("IDAT size limit");
+      if (ioff + c.length < ioff)
+        return 0;
+      if (ioff + c.length > idata_limit) {
+        pngl_uc *p;
+        if (idata_limit == 0)
+          idata_limit = c.length > 4096 ? c.length : 4096;
+        while (ioff + c.length > idata_limit)
+          idata_limit *= 2;
+        p = (pngl_uc *)realloc(z->idata, idata_limit);
+        if (p == 0)
+          return _pngl_err("outofmem");
+        z->idata = p;
+      }
+      if (!_pngl_getn(s, z->idata + ioff, (int)c.length))
+        return _pngl_err("outofdata");
+      ioff += c.length;
+      break;
+    }
+    default:
+      if (first)
+        return _pngl_err("first not IHDR");
+      if ((c.type & (1 << 29)) == 0) {
+        static char invalid_chunk[] = "XXXX PNG chunk not known";
+        invalid_chunk[0] = (pngl_uc)((c.type >> 24) & 255);
+        invalid_chunk[1] = (pngl_uc)((c.type >> 16) & 255);
+        invalid_chunk[2] = (pngl_uc)((c.type >> 8) & 255);
+        invalid_chunk[3] = (pngl_uc)((c.type >> 0) & 255);
+        return _pngl_err(invalid_chunk);
+      }
+      _pngl_skip(s, (int)c.length);
+      break;
+    }
+    _pngl_get32be(s);
+  }
+
+  if (scan != PNGL__SCAN_load)
+    return 1;
+
+  if (z->idata == 0)
+    return _pngl_err("no IDAT");
+  bpl = (s->img_x * z->depth + 7) / 8;
+  raw_len = bpl * s->img_y * s->img_n + s->img_y;
+
+  z->expanded = (pngl_uc *)pngl_zlib_decode_malloc_guesssize_headerflag(
+      (char *)z->idata, (int)ioff, (int)raw_len, (int *)&raw_len, !is_iphone);
+
+  if (z->expanded == 0)
+    return 0;
+
+  free(z->idata);
+  z->idata = 0;
+
+  if ((req_comp == s->img_n + 1 && req_comp != 3 && !pal_img_n) || has_trans)
+    s->img_out_n = s->img_n + 1;
+  else
+    s->img_out_n = s->img_n;
+
+  if (!_pngl_create_png_image(z, z->expanded, raw_len, s->img_out_n, z->depth,
+                              color, interlace))
+    return 0;
+
+  if (has_trans) {
+    if (!_pngl_compute_transparency(z, tc, s->img_out_n))
+      return 0;
+  }
+
+  if (is_iphone &&
+      (_pngl_de_iphone_flag_set ? _pngl_de_iphone_flag_local
+                                : _pngl_de_iphone_flag_global) &&
+      s->img_out_n > 2)
+    _pngl_de_iphone(z);
+
+  if (pal_img_n) {
+    s->img_n = pal_img_n;
+    s->img_out_n = pal_img_n;
+    if (req_comp >= 3)
+      s->img_out_n = req_comp;
+    if (!_pngl_expand_png_palette(z, palette, (int)pal_len, s->img_out_n))
+      return 0;
+  } else if (has_trans) {
+    ++s->img_n;
+  }
+
+  free(z->expanded);
+  z->expanded = 0;
+  _pngl_get32be(s);
+  return 1;
+}
+
+static void *_pngl_do_png(_pngl_png *p, int *x, int *y, int *n, int req_comp,
+                          _pngl_result_info *ri) {
+  void *result = 0;
+  if (req_comp < 0 || req_comp > 4)
+    return (unsigned char *)(size_t)(_pngl_err("bad req_comp") ? 0 : 0);
+
+  if (_pngl_parse_png_file(p, PNGL__SCAN_load, req_comp)) {
+    ri->bits_per_channel = 8;
+
+    result = p->out;
+    p->out = 0;
+
+    if (req_comp && req_comp != p->s->img_out_n) {
+      result = _pngl_convert_format((unsigned char *)result, p->s->img_out_n,
+                                    req_comp, p->s->img_x, p->s->img_y);
+      p->s->img_out_n = req_comp;
+      if (result == 0)
+        return result;
+    }
+
+    *x = (int)p->s->img_x;
+    *y = (int)p->s->img_y;
+    if (n)
+      *n = p->s->img_n;
+  }
+
+  free(p->out);
+  p->out = 0;
+  free(p->expanded);
+  p->expanded = 0;
+  free(p->idata);
+  p->idata = 0;
+  return result;
+}
+
+static void *_pngl_png_load(_pngl_context *s, int *x, int *y, int *comp,
+                            int req_comp, _pngl_result_info *ri) {
+  _pngl_png p;
+  p.s = s;
+  return _pngl_do_png(&p, x, y, comp, req_comp, ri);
+}
+
+static int _pngl_png_test(_pngl_context *s) {
+  int r;
+  r = _pngl_check_png_header(s);
+  _pngl_rewind(s);
+  return r;
+}
+
+static void *_pngl_load_main(_pngl_context *s, int *x, int *y, int *comp,
+                             int req_comp, _pngl_result_info *ri, int bpc) {
+  memset(ri, 0, sizeof(*ri));
+  ri->bits_per_channel = 8;
+  ri->channel_order = PNGL_ORDER_RGB;
+  ri->num_channels = 0;
+
+  if (_pngl_png_test(s))
+    return _pngl_png_load(s, x, y, comp, req_comp, ri);
+
+  return (unsigned char *)(size_t)(_pngl_err("unknown image type") ? 0 : 0);
+}
+
+static unsigned char *_pngl_load_and_postprocess_8bit(_pngl_context *s, int *x,
+                                                      int *y, int *comp,
+                                                      int req_comp) {
+  _pngl_result_info ri;
+  void *result = _pngl_load_main(s, x, y, comp, req_comp, &ri, 8);
+  int channels;
+
+  if (result == 0)
+    return 0;
+
+  if (ri.bits_per_channel != 8) {
+    free(result);
+    return (
+        unsigned char
+            *)(size_t)(_pngl_err(
+                           "Internal error: non-8-bit after PNG load attempt")
+                           ? 0
+                           : 0);
+  }
+
+  if ((_pngl_vertically_flip_on_load_set
+           ? _pngl_vertically_flip_on_load_local
+           : _pngl_vertically_flip_on_load_global)) {
+    channels = req_comp ? req_comp : *comp;
+    _pngl_vertical_flip(result, *x, *y, channels * sizeof(pngl_uc));
+  }
+  return (unsigned char *)result;
+}
+
+PNGLDEF pngl_uc *pngl_load_from_memory(pngl_uc const *buffer, int len, int *x,
+                                       int *y, int *comp, int req_comp) {
+  _pngl_context s;
+  _pngl_start_mem(&s, buffer, len);
+  return _pngl_load_and_postprocess_8bit(&s, x, y, comp, req_comp);
+}
+
+PNGLDEF pngl_uc *pngl_load_from_callbacks(pngl_io_callbacks const *clbk,
+                                          void *user, int *x, int *y, int *comp,
+                                          int req_comp) {
+  _pngl_context s;
+  _pngl_start_callbacks(&s, (pngl_io_callbacks *)clbk, user);
+  return _pngl_load_and_postprocess_8bit(&s, x, y, comp, req_comp);
+}
+
+PNGLDEF void pngl_image_free(void *retval_from_pngl_load) {
+  free(retval_from_pngl_load);
+}
+
+PNGLDEF const char *pngl_failure_reason(void) { return _pngl_g_failure_reason; }
+
+PNGLDEF void pngl_set_flip_vertically_on_load(int flag_true_if_should_flip) {
+  _pngl_vertically_flip_on_load_global = flag_true_if_should_flip;
+}
+
+#endif /* PNGL_IMPLEMENTATION */
+
+#endif /* INCLUDE_PNGL */
+
+#ifndef INCLUDE_PNGL_WRITE_H
+#define INCLUDE_PNGL_WRITE_H
+#ifndef PNGLWDEF
+#ifdef PNGL_WRITE_STATIC
+#define PNGLWDEF static
+#else
+#ifdef __cplusplus
+#define PNGLWDEF extern "C"
+#else
+#define PNGLWDEF extern
+#endif
+#endif
+#endif
+#ifndef PNGL_WRITE_STATIC
+PNGLWDEF int pngl_write_png_compression_level;
+PNGLWDEF int pngl_write_force_png_filter;
+#endif
+#ifndef PNGL_WRITE_NO_STDIO
+PNGLWDEF int pngl_write_png(char const *filename, int w, int h, int comp,
+                            const void *data, int stride_in_bytes);
+#endif
+typedef void pngl_write_func(void *context, void *data, int size);
+PNGLWDEF int pngl_write_png_to_func(pngl_write_func *func, void *context, int w,
+                                    int h, int comp, const void *data,
+                                    int stride_in_bytes);
+PNGLWDEF void pngl_flip_vertically_on_write(int flip_boolean);
+#endif
+#ifdef PNGL_WRITE_IMPLEMENTATION
+#ifndef PNGL_WRITE_NO_STDIO
+#include <stdio.h>
+#endif
+#include <assert.h>
+#include <math.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
+#ifndef PNGLW_MALLOC
+#define PNGLW_MALLOC(sz) malloc(sz)
+#define PNGLW_REALLOC(p, newsz) realloc(p, newsz)
+#define PNGLW_FREE(p) free(p)
+#endif
+#ifndef PNGLW_REALLOC_SIZED
+#define PNGLW_REALLOC_SIZED(p, oldsz, newsz) PNGLW_REALLOC(p, newsz)
+#endif
+#ifndef PNGLW_MEMMOVE
+#define PNGLW_MEMMOVE(a, b, sz) memmove(a, b, sz)
+#endif
+#ifndef PNGLW_ASSERT
+#define PNGLW_ASSERT(x) assert(x)
+#endif
+#define PNGLW_UCHAR(x) (unsigned char)((x) & 0xff)
+#ifdef PNGL_WRITE_STATIC
+static int pngl_write_png_compression_level = 8;
+static int pngl_write_force_png_filter = -1;
+#else
+int pngl_write_png_compression_level = 8;
+int pngl_write_force_png_filter = -1;
+#endif
+static int _pngl_flip_vertically_on_write = 0;
+PNGLWDEF void pngl_flip_vertically_on_write(int flag) {
+  _pngl_flip_vertically_on_write = flag;
+}
+#ifndef PNGLW_ZLIB_COMPRESS
+#define pnglw__sbraw(a) ((int *)(void *)(a) - 2)
+#define pnglw__sbm(a) pnglw__sbraw(a)[0]
+#define pnglw__sbn(a) pnglw__sbraw(a)[1]
+#define pnglw__sbneedgrow(a, n) ((a) == 0 || pnglw__sbn(a) + n >= pnglw__sbm(a))
+#define pnglw__sbmaybegrow(a, n)                                               \
+  (pnglw__sbneedgrow(a, (n)) ? pnglw__sbgrow(a, n) : 0)
+#define pnglw__sbgrow(a, n) pnglw__sbgrowf((void **)&(a), (n), sizeof(*(a)))
+#define pnglw__sbpush(a, v)                                                    \
+  (pnglw__sbmaybegrow(a, 1), (a)[pnglw__sbn(a)++] = (v))
+#define pnglw__sbcount(a) ((a) ? pnglw__sbn(a) : 0)
+#define pnglw__sbfree(a) ((a) ? PNGLW_FREE(pnglw__sbraw(a)), 0 : 0)
+static void *pnglw__sbgrowf(void **arr, int increment, int itemsize) {
+  int m = *arr ? 2 * pnglw__sbm(*arr) + increment : increment + 1;
+  void *p = PNGLW_REALLOC_SIZED(
+      *arr ? pnglw__sbraw(*arr) : 0,
+      *arr ? (pnglw__sbm(*arr) * itemsize + sizeof(int) * 2) : 0,
+      itemsize * m + sizeof(int) * 2);
+  PNGLW_ASSERT(p);
+  if (p) {
+    if (!*arr)
+      ((int *)p)[1] = 0;
+    *arr = (void *)((int *)p + 2);
+    pnglw__sbm(*arr) = m;
+  }
+  return *arr;
+}
+static unsigned char *pnglw__zlib_flushf(unsigned char *data,
+                                         unsigned int *bitbuffer,
+                                         int *bitcount) {
+  while (*bitcount >= 8) {
+    pnglw__sbpush(data, PNGLW_UCHAR(*bitbuffer));
+    *bitbuffer >>= 8;
+    *bitcount -= 8;
+  }
+  return data;
+}
+static int pnglw__zlib_bitrev(int code, int codebits) {
+  int res = 0;
+  while (codebits--) {
+    res = (res << 1) | (code & 1);
+    code >>= 1;
+  }
+  return res;
+}
+static unsigned int pnglw__zlib_countm(unsigned char *a, unsigned char *b,
+                                       int limit) {
+  int i;
+  for (i = 0; i < limit && i < 258; ++i)
+    if (a[i] != b[i])
+      break;
+  return i;
+}
+static unsigned int pnglw__zhash(unsigned char *data) {
+  unsigned int hash = data[0] + (data[1] << 8) + (data[2] << 16);
+  hash ^= hash << 3;
+  hash += hash >> 5;
+  hash ^= hash << 4;
+  hash += hash >> 17;
+  hash ^= hash << 25;
+  hash += hash >> 6;
+  return hash;
+}
+#define pnglw__zlib_flush() (out = pnglw__zlib_flushf(out, &bitbuf, &bitcount))
+#define pnglw__zlib_add(code, codebits)                                        \
+  (bitbuf |= (code) << bitcount, bitcount += (codebits), pnglw__zlib_flush())
+#define pnglw__zlib_huffa(b, c) pnglw__zlib_add(pnglw__zlib_bitrev(b, c), c)
+#define pnglw__zlib_huff1(n) pnglw__zlib_huffa(0x30 + (n), 8)
+#define pnglw__zlib_huff2(n) pnglw__zlib_huffa(0x190 + (n) - 144, 9)
+#define pnglw__zlib_huff3(n) pnglw__zlib_huffa(0 + (n) - 256, 7)
+#define pnglw__zlib_huff4(n) pnglw__zlib_huffa(0xc0 + (n) - 280, 8)
+#define pnglw__zlib_huff(n)                                                    \
+  ((n) <= 143   ? pnglw__zlib_huff1(n)                                         \
+   : (n) <= 255 ? pnglw__zlib_huff2(n)                                         \
+   : (n) <= 279 ? pnglw__zlib_huff3(n)                                         \
+                : pnglw__zlib_huff4(n))
+#define pnglw__zlib_huffb(n)                                                   \
+  ((n) <= 143 ? pnglw__zlib_huff1(n) : pnglw__zlib_huff2(n))
+#define pnglw__ZHASH 16384
+#endif
+PNGLWDEF unsigned char *pngl_zlib_compress(unsigned char *data, int data_len,
+                                           int *out_len, int quality) {
+#ifdef PNGLW_ZLIB_COMPRESS
+  return PNGLW_ZLIB_COMPRESS(data, data_len, out_len, quality);
+#else
+  static unsigned short lengthc[] = {
+      3,  4,  5,  6,  7,  8,  9,  10, 11,  13,  15,  17,  19,  23,  27,
+      31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258, 259};
+  static unsigned char lengtheb[] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1,
+                                     1, 1, 2, 2, 2, 2, 3, 3, 3, 3,
+                                     4, 4, 4, 4, 5, 5, 5, 5, 0};
+  static unsigned short distc[] = {
+      1,    2,    3,    4,    5,    7,     9,     13,    17,   25,   33,
+      49,   65,   97,   129,  193,  257,   385,   513,   769,  1025, 1537,
+      2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577, 32768};
+  static unsigned char disteb[] = {0, 0, 0,  0,  1,  1,  2,  2,  3,  3,
+                                   4, 4, 5,  5,  6,  6,  7,  7,  8,  8,
+                                   9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
+  unsigned int bitbuf = 0;
+  int i, j, bitcount = 0;
+  unsigned char *out = NULL;
+  unsigned char ***hash_table =
+      (unsigned char ***)PNGLW_MALLOC(pnglw__ZHASH * sizeof(unsigned char **));
+  if (hash_table == NULL)
+    return NULL;
+  if (quality < 5)
+    quality = 5;
+  pnglw__sbpush(out, 0x78);
+  pnglw__sbpush(out, 0x5e);
+  pnglw__zlib_add(1, 1);
+  pnglw__zlib_add(1, 2);
+  for (i = 0; i < pnglw__ZHASH; ++i)
+    hash_table[i] = NULL;
+  i = 0;
+  while (i < data_len - 3) {
+    int h = pnglw__zhash(data + i) & (pnglw__ZHASH - 1), best = 3;
+    unsigned char *bestloc = 0;
+    unsigned char **hlist = hash_table[h];
+    int n = pnglw__sbcount(hlist);
+    for (j = 0; j < n; ++j) {
+      if (hlist[j] - data > i - 32768) {
+        int d = pnglw__zlib_countm(hlist[j], data + i, data_len - i);
+        if (d >= best) {
+          best = d;
+          bestloc = hlist[j];
+        }
+      }
+    }
+    if (hash_table[h] && pnglw__sbn(hash_table[h]) == 2 * quality) {
+      PNGLW_MEMMOVE(hash_table[h], hash_table[h] + quality,
+                    sizeof(hash_table[h][0]) * quality);
+      pnglw__sbn(hash_table[h]) = quality;
+    }
+    pnglw__sbpush(hash_table[h], data + i);
+    if (bestloc) {
+      h = pnglw__zhash(data + i + 1) & (pnglw__ZHASH - 1);
+      hlist = hash_table[h];
+      n = pnglw__sbcount(hlist);
+      for (j = 0; j < n; ++j) {
+        if (hlist[j] - data > i - 32767) {
+          int e = pnglw__zlib_countm(hlist[j], data + i + 1, data_len - i - 1);
+          if (e > best) {
+            bestloc = NULL;
+            break;
+          }
+        }
+      }
+    }
+    if (bestloc) {
+      int d = (int)(data + i - bestloc);
+      PNGLW_ASSERT(d <= 32767 && best <= 258);
+      for (j = 0; best > lengthc[j + 1] - 1; ++j)
+        ;
+      pnglw__zlib_huff(j + 257);
+      if (lengtheb[j])
+        pnglw__zlib_add(best - lengthc[j], lengtheb[j]);
+      for (j = 0; d > distc[j + 1] - 1; ++j)
+        ;
+      pnglw__zlib_add(pnglw__zlib_bitrev(j, 5), 5);
+      if (disteb[j])
+        pnglw__zlib_add(d - distc[j], disteb[j]);
+      i += best;
+    } else {
+      pnglw__zlib_huffb(data[i]);
+      ++i;
+    }
+  }
+  for (; i < data_len; ++i)
+    pnglw__zlib_huffb(data[i]);
+  pnglw__zlib_huff(256);
+  while (bitcount)
+    pnglw__zlib_add(0, 1);
+  for (i = 0; i < pnglw__ZHASH; ++i)
+    (void)pnglw__sbfree(hash_table[i]);
+  PNGLW_FREE(hash_table);
+  if (pnglw__sbn(out) > data_len + 2 + ((data_len + 32766) / 32767) * 5) {
+    pnglw__sbn(out) = 2;
+    for (j = 0; j < data_len;) {
+      int blocklen = data_len - j;
+      if (blocklen > 32767)
+        blocklen = 32767;
+      pnglw__sbpush(out, data_len - j == blocklen);
+      pnglw__sbpush(out, PNGLW_UCHAR(blocklen));
+      pnglw__sbpush(out, PNGLW_UCHAR(blocklen >> 8));
+      pnglw__sbpush(out, PNGLW_UCHAR(~blocklen));
+      pnglw__sbpush(out, PNGLW_UCHAR(~blocklen >> 8));
+      memcpy(out + pnglw__sbn(out), data + j, blocklen);
+      pnglw__sbn(out) += blocklen;
+      j += blocklen;
+    }
+  }
+  {
+    unsigned int s1 = 1, s2 = 0;
+    int blocklen = (int)(data_len % 5552);
+    j = 0;
+    while (j < data_len) {
+      for (i = 0; i < blocklen; ++i) {
+        s1 += data[j + i];
+        s2 += s1;
+      }
+      s1 %= 65521;
+      s2 %= 65521;
+      j += blocklen;
+      blocklen = 5552;
+    }
+    pnglw__sbpush(out, PNGLW_UCHAR(s2 >> 8));
+    pnglw__sbpush(out, PNGLW_UCHAR(s2));
+    pnglw__sbpush(out, PNGLW_UCHAR(s1 >> 8));
+    pnglw__sbpush(out, PNGLW_UCHAR(s1));
+  }
+  *out_len = pnglw__sbn(out);
+  PNGLW_MEMMOVE(pnglw__sbraw(out), out, *out_len);
+  return (unsigned char *)pnglw__sbraw(out);
+#endif
+}
+static unsigned int pnglw__crc32(unsigned char *buffer, int len) {
+#ifdef PNGLW_CRC32
+  return PNGLW_CRC32(buffer, len);
+#else
+  static unsigned int crc_table[256] = {
+      0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA, 0x076DC419, 0x706AF48F,
+      0xE963A535, 0x9E6495A3, 0x0eDB8832, 0x79DCB8A4, 0xE0D5E91E, 0x97D2D988,
+      0x09B64C2B, 0x7EB17CBD, 0xE7B82D07, 0x90BF1D91, 0x1DB71064, 0x6AB020F2,
+      0xF3B97148, 0x84BE41DE, 0x1ADAD47D, 0x6DDDE4EB, 0xF4D4B551, 0x83D385C7,
+      0x136C9856, 0x646BA8C0, 0xFD62F97A, 0x8A65C9EC, 0x14015C4F, 0x63066CD9,
+      0xFA0F3D63, 0x8D080DF5, 0x3B6E20C8, 0x4C69105E, 0xD56041E4, 0xA2677172,
+      0x3C03E4D1, 0x4B04D447, 0xD20D85FD, 0xA50AB56B, 0x35B5A8FA, 0x42B2986C,
+      0xDBBBC9D6, 0xACBCF940, 0x32D86CE3, 0x45DF5C75, 0xDCD60DCF, 0xABD13D59,
+      0x26D930AC, 0x51DE003A, 0xC8D75180, 0xBFD06116, 0x21B4F4B5, 0x56B3C423,
+      0xCFBA9599, 0xB8BDA50F, 0x2802B89E, 0x5F058808, 0xC60CD9B2, 0xB10BE924,
+      0x2F6F7C87, 0x58684C11, 0xC1611DAB, 0xB6662D3D, 0x76DC4190, 0x01DB7106,
+      0x98D220BC, 0xEFD5102A, 0x71B18589, 0x06B6B51F, 0x9FBFE4A5, 0xE8B8D433,
+      0x7807C9A2, 0x0F00F934, 0x9609A88E, 0xE10E9818, 0x7F6A0DBB, 0x086D3D2D,
+      0x91646C97, 0xE6635C01, 0x6B6B51F4, 0x1C6C6162, 0x856530D8, 0xF262004E,
+      0x6C0695ED, 0x1B01A57B, 0x8208F4C1, 0xF50FC457, 0x65B0D9C6, 0x12B7E950,
+      0x8BBEB8EA, 0xFCB9887C, 0x62DD1DDF, 0x15DA2D49, 0x8CD37CF3, 0xFBD44C65,
+      0x4DB26158, 0x3AB551CE, 0xA3BC0074, 0xD4BB30E2, 0x4ADFA541, 0x3DD895D7,
+      0xA4D1C46D, 0xD3D6F4FB, 0x4369E96A, 0x346ED9FC, 0xAD678846, 0xDA60B8D0,
+      0x44042D73, 0x33031DE5, 0xAA0A4C5F, 0xDD0D7CC9, 0x5005713C, 0x270241AA,
+      0xBE0B1010, 0xC90C2086, 0x5768B525, 0x206F85B3, 0xB966D409, 0xCE61E49F,
+      0x5EDEF90E, 0x29D9C998, 0xB0D09822, 0xC7D7A8B4, 0x59B33D17, 0x2EB40D81,
+      0xB7BD5C3B, 0xC0BA6CAD, 0xEDB88320, 0x9ABFB3B6, 0x03B6E20C, 0x74B1D29A,
+      0xEAD54739, 0x9DD277AF, 0x04DB2615, 0x73DC1683, 0xE3630B12, 0x94643B84,
+      0x0D6D6A3E, 0x7A6A5AA8, 0xE40ECF0B, 0x9309FF9D, 0x0A00AE27, 0x7D079EB1,
+      0xF00F9344, 0x8708A3D2, 0x1E01F268, 0x6906C2FE, 0xF762575D, 0x806567CB,
+      0x196C3671, 0x6E6B06E7, 0xFED41B76, 0x89D32BE0, 0x10DA7A5A, 0x67DD4ACC,
+      0xF9B9DF6F, 0x8EBEEFF9, 0x616BFFD3, 0x166CCF45, 0xD6D6A3E8, 0xA1D1937E,
+      0x38D8C2C4, 0x4FDFF252, 0xD1BB67F1, 0xA6BC5767, 0x3FB506DD, 0x48B2364B,
+      0xD80D2BDA, 0xAF0A1B4C, 0x36034AF6, 0x41047A60, 0xDF60EFC3, 0xA867DF55,
+      0x316E8EEF, 0x4669BE79, 0xCB61B38C, 0xBC66831A, 0x256FD2A0, 0x5268E236,
+      0xBAD03605, 0xCDD70693, 0x54DE5729, 0x23D967BF, 0xB3667A2E, 0xC4614AB8,
+      0x5D681B02, 0x2A6F2B94, 0xB40BBE37, 0xC30C8EA1, 0x5A05DF1B, 0x2D02EF8D,
+      0x9B64C2B0, 0xEC63F226, 0x756AA39C, 0x026D930A, 0x9C0906A9, 0xEB0E363F,
+      0x72076785, 0x05005713, 0x95BF4A82, 0xE2B87A14, 0x7BB12BAE, 0x0CB61B38,
+      0x92D28E9B, 0xE5D5BE0D, 0x7CDCEFB7, 0x0BDBDF21, 0x86D3D2D4, 0xF1D4E242,
+      0x68DDB3F8, 0x1FDA836E, 0x81BE16CD, 0xF6B9265B, 0x6FB077E1, 0x18B74777,
+      0x88085AE6, 0xFF0F6A70, 0x66063BCA, 0x11010B5C, 0x8F659EFF, 0xF862AE69,
+      0x616BFFD3, 0x166CCF45, 0xA00AE278, 0xD70DD2EE, 0x4E048354, 0x3903B3C2,
+      0xA7672661, 0xD06016F7, 0x4969474D, 0x3E6E77DB, 0xAED16A4A, 0xD9D65ADC,
+      0x40DF0B66, 0x37D83BF0, 0xA9BCAE53, 0xDEBB9EC5, 0x47B2CF7F, 0x30B5FFE9,
+      0xBDBDF21C, 0xCABAC28A, 0x53B39330, 0x24B4A3A6, 0xBAD03605, 0xCDD70693,
+      0x54DE5729, 0x23D967BF, 0xB3667A2E, 0xC4614AB8, 0x5D681B02, 0x2A6F2B94,
+      0xB40BBE37, 0xC30C8EA1, 0x5A05DF1B, 0x2D02EF8D};
+  unsigned int crc = ~0u;
+  int i;
+  for (i = 0; i < len; ++i)
+    crc = (crc >> 8) ^ crc_table[buffer[i] ^ (crc & 0xff)];
+  return ~crc;
+#endif
+}
+#define pnglw__wpng4(o, a, b, c, d)                                            \
+  ((o)[0] = PNGLW_UCHAR(a), (o)[1] = PNGLW_UCHAR(b), (o)[2] = PNGLW_UCHAR(c),  \
+   (o)[3] = PNGLW_UCHAR(d), (o) += 4)
+#define pnglw__wp32(data, v)                                                   \
+  pnglw__wpng4(data, (v) >> 24, (v) >> 16, (v) >> 8, (v));
+#define pnglw__wptag(data, s) pnglw__wpng4(data, s[0], s[1], s[2], s[3])
+static void pnglw__wpcrc(unsigned char **data, int len) {
+  unsigned int crc = pnglw__crc32(*data - len - 4, len + 4);
+  pnglw__wp32(*data, crc);
+}
+static unsigned char pnglw__paeth(int a, int b, int c) {
+  int p = a + b - c, pa = abs(p - a), pb = abs(p - b), pc = abs(p - c);
+  if (pa <= pb && pa <= pc)
+    return PNGLW_UCHAR(a);
+  if (pb <= pc)
+    return PNGLW_UCHAR(b);
+  return PNGLW_UCHAR(c);
+}
+static void pnglw__encode_png_line(unsigned char *pixels, int stride_bytes,
+                                   int width, int height, int y, int n,
+                                   int filter_type, signed char *line_buffer) {
+  static int mapping[] = {0, 1, 2, 3, 4};
+  static int firstmap[] = {0, 1, 0, 5, 6};
+  int *mymap = (y != 0) ? mapping : firstmap;
+  int i;
+  int type = mymap[filter_type];
+  unsigned char *z =
+      pixels +
+      stride_bytes * (_pngl_flip_vertically_on_write ? height - 1 - y : y);
+  int signed_stride =
+      _pngl_flip_vertically_on_write ? -stride_bytes : stride_bytes;
+  if (type == 0) {
+    memcpy(line_buffer, z, width * n);
+    return;
+  }
+  for (i = 0; i < n; ++i) {
+    switch (type) {
+    case 1:
+      line_buffer[i] = z[i];
+      break;
+    case 2:
+      line_buffer[i] = z[i] - z[i - signed_stride];
+      break;
+    case 3:
+      line_buffer[i] = z[i] - (z[i - signed_stride] >> 1);
+      break;
+    case 4:
+      line_buffer[i] =
+          (signed char)(z[i] - pnglw__paeth(0, z[i - signed_stride], 0));
+      break;
+    case 5:
+      line_buffer[i] = z[i];
+      break;
+    case 6:
+      line_buffer[i] = z[i];
+      break;
+    }
+  }
+  switch (type) {
+  case 1:
+    for (i = n; i < width * n; ++i)
+      line_buffer[i] = z[i] - z[i - n];
+    break;
+  case 2:
+    for (i = n; i < width * n; ++i)
+      line_buffer[i] = z[i] - z[i - signed_stride];
+    break;
+  case 3:
+    for (i = n; i < width * n; ++i)
+      line_buffer[i] = z[i] - ((z[i - n] + z[i - signed_stride]) >> 1);
+    break;
+  case 4:
+    for (i = n; i < width * n; ++i)
+      line_buffer[i] = z[i] - pnglw__paeth(z[i - n], z[i - signed_stride],
+                                           z[i - signed_stride - n]);
+    break;
+  case 5:
+    for (i = n; i < width * n; ++i)
+      line_buffer[i] = z[i] - (z[i - n] >> 1);
+    break;
+  case 6:
+    for (i = n; i < width * n; ++i)
+      line_buffer[i] = z[i] - pnglw__paeth(z[i - n], 0, 0);
+    break;
+  }
+}
+PNGLWDEF unsigned char *pngl_write_png_to_mem(const unsigned char *pixels,
+                                              int stride_bytes, int x, int y,
+                                              int n, int *out_len, int* order) {
+  int force_filter = pngl_write_force_png_filter;
+  int ctype[5] = {-1, 0, 4, 2, 6};
+  unsigned char sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+  unsigned char *out, *o, *filt, *zlib;
+  signed char *line_buffer;
+  int j, zlen;
+  if (stride_bytes == 0)
+    stride_bytes = x * n;
+  if (force_filter >= 5) {
+    force_filter = -1;
+  }
+  filt = (unsigned char *)PNGLW_MALLOC((x * n + 1) * y);
+  if (!filt)
+    return 0;
+  line_buffer = (signed char *)PNGLW_MALLOC(x * n);
+  if (!line_buffer) {
+    PNGLW_FREE(filt);
+    return 0;
+  }
+  for (j = 0; j < y; ++j) {
+    int filter_type;
+    if (force_filter > -1) {
+      filter_type = force_filter;
+      pnglw__encode_png_line((unsigned char *)(pixels), stride_bytes, x, y, j,
+                             n, force_filter, line_buffer);
+    } else {
+      int best_filter = 0, best_filter_val = 0x7fffffff, est, i;
+      for (filter_type = 0; filter_type < 5; filter_type++) {
+        pnglw__encode_png_line((unsigned char *)(pixels), stride_bytes, x, y, j,
+                               n, filter_type, line_buffer);
+        est = 0;
+        for (i = 0; i < x * n; ++i) {
+          est += abs((signed char)line_buffer[i]);
+        }
+        if (est < best_filter_val) {
+          best_filter_val = est;
+          best_filter = filter_type;
+        }
+      }
+      if (filter_type != best_filter) {
+        pnglw__encode_png_line((unsigned char *)(pixels), stride_bytes, x, y, j,
+                               n, best_filter, line_buffer);
+        filter_type = best_filter;
+      }
+    }
+    filt[j * (x * n + 1)] = (unsigned char)filter_type;
+    PNGLW_MEMMOVE(filt + j * (x * n + 1) + 1, line_buffer, x * n);
+  }
+  PNGLW_FREE(line_buffer);
+  zlib = pngl_zlib_compress(filt, y * (x * n + 1), &zlen,
+                            pngl_write_png_compression_level);
+  PNGLW_FREE(filt);
+  if (!zlib)
+    return 0;
+  out = (unsigned char *)PNGLW_MALLOC(8 + 12 + 13 + 12 + zlen + 12);
+  if (!out)
+    return 0;
+  *out_len = 8 + 12 + 13 + 12 + zlen + 12;
+  o = out;
+  PNGLW_MEMMOVE(o, sig, 8);
+  o += 8;
+  pnglw__wp32(o, 13);
+  pnglw__wptag(o, "IHDR");
+  pnglw__wp32(o, x);
+  pnglw__wp32(o, y);
+  *o++ = 8;
+  *o++ = PNGLW_UCHAR(ctype[n]);
+  *o++ = 0;
+  *o++ = 0;
+  *o++ = 0;
+  pnglw__wpcrc(&o, 13);
+  pnglw__wp32(o, zlen);
+  pnglw__wptag(o, "IDAT");
+  PNGLW_MEMMOVE(o, zlib, zlen);
+  o += zlen;
+  PNGLW_FREE(zlib);
+  pnglw__wpcrc(&o, zlen);
+  pnglw__wp32(o, 0);
+  pnglw__wptag(o, "IEND");
+  pnglw__wpcrc(&o, 0);
+  PNGLW_ASSERT(o == out + *out_len);
+  return out;
+}
+#ifndef PNGL_WRITE_NO_STDIO
+static void _pngl_stdio_write(void *context, void *data, int size) {
+  fwrite(data, 1, size, (FILE *)context);
+}
+static FILE *pnglw__fopen(char const *filename, char const *mode) {
+  FILE *f;
+#if defined(_MSC_VER) && _MSC_VER >= 1400
+  if (0 != fopen_s(&f, filename, mode))
+    f = 0;
+#else
+  f = fopen(filename, mode);
+#endif
+  return f;
+}
+PNGLWDEF int pngl_write_png(char const *filename, int x, int y, int comp,
+                            const void *data, int stride_bytes) {
+  FILE *f;
+  int len;
+  unsigned char *png = pngl_write_png_to_mem((const unsigned char *)data,
+                                             stride_bytes, x, y, comp, &len);
+  if (png == NULL)
+    return 0;
+  f = pnglw__fopen(filename, "wb");
+  if (!f) {
+    PNGLW_FREE(png);
+    return 0;
+  }
+  fwrite(png, 1, len, f);
+  fclose(f);
+  PNGLW_FREE(png);
+  return 1;
+}
+
+#endif
+PNGLWDEF int pngl_write_png_to_func(pngl_write_func *func, void *context, int x,
+                                    int y, int comp, const void *data,
+                                    int stride_bytes) {
+  int len;
+  unsigned char *png = pngl_write_png_to_mem((const unsigned char *)data,
+                                             stride_bytes, x, y, comp, &len);
+  if (png == NULL)
+    return 0;
+  func(context, png, len);
+  PNGLW_FREE(png);
+  return 1;
+}
+#endif /* PNGL_IMAGE_WRITE_IMPLEMENTATION */

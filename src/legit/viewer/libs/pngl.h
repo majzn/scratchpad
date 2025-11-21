@@ -2012,6 +2012,7 @@ PNGLWDEF int pngl_write_png(char const *filename, int x, int y, int comp,
   PNGLW_FREE(png);
   return 1;
 }
+
 #endif
 PNGLWDEF int pngl_write_png_to_func(pngl_write_func *func, void *context, int x,
                                     int y, int comp, const void *data,
