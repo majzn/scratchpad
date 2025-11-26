@@ -1,3 +1,6 @@
+
+
+
 #ifndef CHRONOS_H
 #define CHRONOS_H
 
@@ -51,7 +54,7 @@ CR_API void cr_unlock(cr_context *ctx);
 #define CR_MAX_SYMBOLS 1024
 #define CR_MAX_NODES 16384
 #define CR_MAX_BUFFERS 128
-#define CR_MAX_ARGS 64
+#define CR_MAX_ARGS 16
 #define CR_MAX_FUNCS 256
 #define CR_MAX_MACROS 256
 #define CR_MAX_MACRO_SIZE 8192
@@ -66,7 +69,7 @@ enum {
   OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, OP_POW,
   OP_GT, OP_LT, OP_GE, OP_LE, OP_EQ, OP_NE, OP_AND, OP_OR, OP_NOT,
   OP_SINE, OP_PHASOR, OP_NOISE,
-  OP_SEQ, OP_LPF, OP_FILTER, OP_PEAK_EQ,
+  OP_SEQ, OP_PATTERN, OP_LPF, OP_FILTER, OP_PEAK_EQ, /* ADDED OP_PATTERN */
   OP_DELAY, OP_REVERB, OP_COMPRESS, OP_LIMIT, OP_ADSR, OP_CLIP,
   OP_TANH, OP_FOLD, OP_SLEW, OP_SAH,
   OP_PROBE, OP_TIME, OP_READ, 
@@ -343,7 +346,7 @@ static double run_node(cr_context *ctx, int idx) {
                 for (k = 0; k < 32; k++) {
                     int l = (state >> ((k + 1) % 32)) & 1;
                     int c = (state >> k) & 1;
-                    int r = (state >> ((k - 1 + 32) % 32)) & 1;
+                    int r = (state >> ((k - 1 + 32) % 32) & 1);
                     int p = (l << 2) | (c << 1) | r;
                     if ((rule >> p) & 1) next_state |= (1 << k);
                 }
@@ -428,6 +431,43 @@ static double run_node(cr_context *ctx, int idx) {
             break;
         }
         
+        case OP_PATTERN: {
+            // v[0]: Trigger signal (e.g., pulse or rhythmic gate)
+            // v[1]: Buffer Index (The array ID)
+            
+            double trig = v[0];
+            int buf_idx = (int)v[1];
+            double prev_trig = n->dsp.s[1];
+            double current_index = n->dsp.s[0];
+
+            if (buf_idx < 0 || buf_idx >= ctx->buffer_count) {
+                n->dsp.s[1] = trig; // Update trigger state
+                out = 0.0; 
+                break;
+            }
+            
+            cr_buffer *b = &ctx->buffers[buf_idx];
+            int length = b->length;
+            
+            if (length > 0 && trig > 0.1 && prev_trig <= 0.1) {
+                // Rising edge detected, advance index
+                current_index = fmod(current_index + 1.0, length);
+            }
+            
+            n->dsp.s[0] = current_index; // Store new index
+            n->dsp.s[1] = trig;          // Store current trigger state
+
+            // Read the value at the current index
+            int idx = (int)current_index;
+            if (idx >= 0 && idx < length) {
+                out = b->data[idx];
+            } else {
+                // Should not happen if fmod is used correctly, but safeguard
+                out = 0.0; 
+            }
+            break;
+        }
+
         case OP_GET: {
             int buf_idx = (int)v[0];
             if (buf_idx >= 0 && buf_idx < ctx->buffer_count) {
@@ -597,21 +637,21 @@ static double run_node(cr_context *ctx, int idx) {
             
             double a0, a1, a2, b0, b1, b2;
             
-            if (type == 1) {
+            if (type == 1) { /* LPF */
                 b0 =  (1 - cos_w) / 2;
                 b1 =   1 - cos_w;
                 b2 =  (1 - cos_w) / 2;
                 a0 =   1 + alpha;
                 a1 =  -2 * cos_w;
                 a2 =   1 - alpha;
-            } else if (type == 2) {
+            } else if (type == 2) { /* HPF */
                 b0 =  (1 + cos_w) / 2;
                 b1 = -(1 + cos_w);
                 b2 =  (1 + cos_w) / 2;
                 a0 =   1 + alpha;
                 a1 =  -2 * cos_w;
                 a2 =   1 - alpha;
-            } else {
+            } else { /* BPF or default */
                  b0 =   alpha;
                  b1 =   0;
                  b2 =  -alpha;
@@ -1090,6 +1130,7 @@ static int factor(cr_context *ctx) {
             else if (!strcmp(name, "phasor")) op = OP_PHASOR;
             else if (!strcmp(name, "noise")) op = OP_NOISE;
             else if (!strcmp(name, "seq")) op = OP_SEQ;
+            else if (!strcmp(name, "pattern")) op = OP_PATTERN; /* ADDED OP_PATTERN */
             else if (!strcmp(name, "lpf")) op = OP_LPF;
             else if (!strcmp(name, "delay")) op = OP_DELAY;
             else if (!strcmp(name, "reverb")) op = OP_REVERB;

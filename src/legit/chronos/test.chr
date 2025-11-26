@@ -1,104 +1,170 @@
-# --------------------------------------------------
-# Global Constants & Setup
-# --------------------------------------------------
-out_amp = 0.5    # Global volume
-sr = 44100.0     # Sample Rate
-bpm = 100.0
-time_per_beat = 60.0 / bpm 
+# Chronos Song: Spectral Ascent
+# Structure: Intro -> Verse 1 -> Chorus -> Verse 2 -> Bridge -> Chorus -> Outro
+# FIX: Added missing G4 and A4 frequency definitions.
 
-# Helper function to get frequency (used outside array() definitions)
-def freq(midinote) {
-    return mtof(midinote)
+# --- Global Timing & Constants ---
+BPM = 124.0
+BARS_PER_SECTION = 4.0
+TIME_PER_BEAT = 60.0 / BPM
+TIME_PER_BAR = TIME_PER_BEAT * BARS_PER_SECTION
+SIXTEENTH_NOTE = TIME_PER_BEAT / 4.0
+
+# --- Literal Frequency Values (Hz) ---
+# Scale: E Minor
+E3_FREQ = 164.81  # MIDI 52
+G3_FREQ = 196.00  # MIDI 55
+A3_FREQ = 220.00  # MIDI 57
+B3_FREQ = 246.94  # MIDI 59
+C4_FREQ = 261.63  # MIDI 60
+D4_FREQ = 293.66  # MIDI 62
+E4_FREQ = 329.63  # MIDI 64
+G4_FREQ = 392.00  # MIDI 67 <-- FIXED/ADDED
+A4_FREQ = 440.00  # MIDI 69 <-- FIXED/ADDED
+SILENCE = 0.0
+
+# --- Macro 1: Pulse Synth Voice (Used for Lead/Arp) ---
+def pulse_voice(freq, gate, a, d, cut, gain) {
+    # Basic square-like pulse (Clip sine wave)
+    osc = clip(sine(phasor(freq) * 4.0) * 2.0)
+    
+    env = adsr(gate, a, d)
+    
+    # Filter Cutoff modulated by time (sweep) and envelope
+    time_sweep = lpf(time, 0.5, 0.5)
+    dynamic_cut = lerp(cut, 12000.0, time_sweep + env * 0.5)
+    
+    final_output = lpf(osc * env * gain, dynamic_cut, 0.6)
+    return final_output
 }
 
-# --------------------------------------------------
-# 1. Percussion Layer (Kick and Hi-Hat)
-# --------------------------------------------------
+# --- Macro 2: Sub Bass (Simple sine wave, always filtered low) ---
+def sub_bass(freq, gate) {
+    env = adsr(gate, 0.001, 0.2)
+    tone = sine(phasor(freq)) * env * 0.8
+    # Aggressive LPF to keep it sub-sonic
+    final_output = lpf(tone, 120.0, 0.5)
+    return final_output
+}
 
-# --- Kick Drum (Sine Wave Pitch Drop) ---
-kick_gate = seq(time_per_beat * 2, 1, 0, 0, 0) # Hits on beats 1 and 3
-kick_env = adsr(kick_gate, 0.001, 0.2) * 0.9 # Fast attack, short decay
-freq_start = lerp(100.0, 30.0, kick_env) 
-kick_osc = sine(phasor(freq_start))
-kick_out = clip(kick_osc * kick_env * 1.5) 
-kick_out = lpf(kick_out, 500.0, 0.5) * 0.5
+# --- Shared Drum Patterns ---
 
-# --- Hi-Hat (Noise with high-pass filter) ---
-hat_gate = seq(time_per_beat, 0, 1, 0, 1) # Hits on beats 2 and 4
-hat_env = adsr(hat_gate, 0.005, 0.1) * 0.8
-hat_noise = noise() * hat_env
-hat_out = filter(hat_noise, 2, 8000.0, 0.5) * 0.2 # Type 2 is High-pass filter
+# Kick Pattern: 4 on the floor (quarter notes)
+KICK_PAT = array(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
+KICK_TRIG = pattern(TIME_PER_BEAT * 2.0, KICK_PAT)
+KICK_GATE = KICK_TRIG > 0.5
 
-# --------------------------------------------------
-# 2. Bass Line 
-# --------------------------------------------------
-bass_gate = seq(time_per_beat * 2, 1, 0, 1, 0) 
-bass_env = adsr(bass_gate, 0.01, 0.2)
-bass_freq = freq(30)
-bass_osc = sine(phasor(bass_freq))
-bass_out = lpf(bass_osc * bass_env, 120.0, 0.5) * 0.4
+# Snare Pattern: On beats 2 and 4
+SNARE_PAT = array(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+SNARE_TRIG = pattern(TIME_PER_BEAT * 2.0, SNARE_PAT)
+SNARE_GATE = SNARE_TRIG > 0.5
 
-# --------------------------------------------------
-# 3. Ambient Chord Pad (Harmonies)
-# C3 -> Eb3 -> F3 -> G3 (16 beats total loop)
-# --------------------------------------------------
-# FIXED: Using constant values to resolve compile-time error.
-chord_notes = array(130.8128, 155.5635, 174.6141, 195.9977)
-chord_duration = time_per_beat * 4 
-sequence_freq = 1.0 / (chord_duration * 4.0)
+# Hi-Hat Pattern: Eighth notes
+HAT_PAT = array(0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
+HAT_TRIG = pattern(TIME_PER_BEAT * 2.0, HAT_PAT)
+HAT_GATE = HAT_TRIG > 0.5
 
-phase = phasor(sequence_freq) * 4.0 
-chord_sel = floor(phase)
-root_freq = get(chord_notes, chord_sel)
+# Drum Synthesis
+KICK = sub_bass(80.0, KICK_GATE) * 1.5
+SNARE_NOISE = noise() * adsr(SNARE_GATE, 0.01, 0.1)
+SNARE = filter(SNARE_NOISE, 3.0, 800.0, 0.5) # High Pass
+HAT = noise() * adsr(HAT_GATE, 0.001, 0.05)
+DRUMS_MIX = (KICK * 0.7) + (SNARE * 0.4) + (HAT * 0.2)
+DRUMS_MASTER = compress(DRUMS_MIX, -15.0, 4.0, 0.01)
 
-# Harmony voices
-fifth_freq = root_freq * 1.5
-third_freq = root_freq * 1.189 
+# --- Musical Material Definitions (Grooves) ---
 
-pad_gate = 1.0
-pad_env = adsr(pad_gate, 2.0, 10.0)
+# GROOVE A: Simple Bass Loop (Used in Verse)
+BASS_ARP_A = array(E3_FREQ, SILENCE, G3_FREQ, SILENCE, A3_FREQ, SILENCE, G3_FREQ, SILENCE)
+BASS_NOTE_A = pattern(TIME_PER_BEAT * 2.0, BASS_ARP_A)
+BASS_GATE_A = BASS_NOTE_A > 0.0
+BASS_TONE_A = sub_bass(BASS_NOTE_A, BASS_GATE_A) * 0.8
 
-osc_root = sine(phasor(root_freq)) * 0.5
-osc_fifth = sine(phasor(fifth_freq * 1.005)) * 0.3
-osc_third = sine(phasor(third_freq * 0.995)) * 0.2
+# GROOVE B: Chord Progression (Used in Chorus)
+# Uses the newly defined G4_FREQ and A4_FREQ
+CHORD_B = array(E4_FREQ, G4_FREQ, A4_FREQ, G4_FREQ)
+CHORD_B_TRIG = seq(TIME_PER_BAR, 1.0, 0.0, 0.0, 0.0) # Trigger once per bar
+CHORD_B_NOTE = pattern(TIME_PER_BAR * 4.0, CHORD_B)
+CHORD_B_GATE = CHORD_B_NOTE > 0.0
+CHORD_TONE_B = pulse_voice(CHORD_B_NOTE * 0.7, CHORD_B_GATE, 0.01, 0.8, 4000.0, 0.3)
+# Chorus Bass (sustained low notes)
+BASS_B_NOTE = pattern(TIME_PER_BAR * 4.0, array(E3_FREQ, E3_FREQ, C4_FREQ, C4_FREQ))
+BASS_TONE_B = sub_bass(BASS_B_NOTE, 1.0) * 1.2
 
-pad_mix = osc_root + osc_fifth + osc_third
-pad_out = lpf(pad_mix * pad_env, 1500.0, 0.9) * 0.3
+# GROOVE C: Climactic Arp (Used in Bridge)
+ARP_C = array(E4_FREQ, D4_FREQ, C4_FREQ, D4_FREQ, E4_FREQ, D4_FREQ, C4_FREQ, D4_FREQ)
+ARP_NOTE_C = pattern(SIXTEENTH_NOTE * 8.0, ARP_C)
+ARP_GATE_C = ARP_NOTE_C > 0.0
+LEAD_TONE_C = pulse_voice(ARP_NOTE_C * 0.9, ARP_GATE_C, 0.001, 0.1, 8000.0, 0.5)
+LEAD_DELAY_C = delay(LEAD_TONE_C, 0.15, 0.5) # Fast delay for rhythmic effect
 
-# --------------------------------------------------
-# 4. Lead Melody 
-# C4, D4, C4, F4 - loops over 2 beats
-# --------------------------------------------------
-melody_step = time_per_beat / 2.0 
+# --- Song Structure Sequencer ---
 
-# FIXED: Using constant values to resolve compile-time error.
-melody_notes = array(261.6256, 293.6648, 261.6256, 349.2282) 
-melody_loop_freq = 1.0 / (melody_step * 4.0) 
+# Section length in seconds (4 bars per section step)
+SECTION_DURATION = TIME_PER_BAR
 
-mel_phase = phasor(melody_loop_freq) * 4.0
-mel_sel = floor(mel_phase)
-mel_freq = get(melody_notes, mel_sel)
+# Section Definition (The "Map")
+# Sections: 1=Intro, 2=Verse, 3=Chorus, 4=Bridge, 5=Outro
+# We use a pattern index to select the material. Note that Verse 2 is handled by Section 4 logic.
 
-mel_gate = seq(melody_step, 1, 0, 1, 0, 1, 0, 1, 0) 
+# [Intro] [Verse 1] [Chorus] [Verse 2] [Bridge] [Chorus] [Outro]
+# 8 bars  | 16 bars | 8 bars | 16 bars | 8 bars | 8 bars | 8 bars 
+SONG_MAP = array(
+    1.0, 1.0,        # Intro (8 bars)
+    2.0, 2.0, 2.0, 2.0, # Verse 1 (16 bars)
+    3.0, 3.0,        # Chorus 1 (8 bars)
+    2.0, 2.0, 2.0, 2.0, # Verse 2 (16 bars)
+    4.0, 4.0,        # Bridge (8 bars)
+    3.0, 3.0,        # Chorus 2 (8 bars)
+    5.0, 5.0         # Outro (8 bars)
+)
 
-mel_env = adsr(mel_gate, 0.01, 0.5)
-mel_osc = phasor(mel_freq) * 2.0 - 1.0 # Phasor creates a saw wave
-mel_out = filter(mel_osc * mel_env, 1, 1500.0, 0.5) * 0.4 # Type 1 is Low-pass filter
+# Sequencer runs based on time (in 4-bar blocks)
+CURRENT_SECTION_ID = pattern(SECTION_DURATION, SONG_MAP)
 
-# --------------------------------------------------
-# 5. Wav Loop Texture 
-# --------------------------------------------------
-wav_loop = load("sample.wav") 
-wav_out = filter(wav_loop, 2, 500.0, 0.5) * 0.1 
+# --- Dynamic Arrangement Logic (Current Music Output) ---
 
-# --------------------------------------------------
-# Final Mix & Output (Stereo)
-# --------------------------------------------------
-master_mix = bass_out + pad_out + mel_out + kick_out + hat_out + wav_out
+# Drums fade in over the Intro (first 8 bars, 2 sections)
+DRUMS_FADE_START = SECTION_DURATION * 0.0
+DRUMS_FADE_END = SECTION_DURATION * 2.0
+DRUMS_FADE = lerp(0.0, 1.0, (time - DRUMS_FADE_START) / (DRUMS_FADE_END - DRUMS_FADE_START))
+DRUMS_FADE = clip(DRUMS_FADE)
+DRUMS_MASTER_OUT = DRUMS_MASTER * DRUMS_FADE
 
-# Apply final soft clip (tanh) and volume reduction
-master_out = tanh(master_mix * 2.0) * out_amp
+# Material Selection:
+MUSIC_OUT = select(
+    CURRENT_SECTION_ID == 1.0, # Intro: Simple sustained bass tone
+    sub_bass(E3_FREQ, 1.0) * 0.1, 
+    select(
+        CURRENT_SECTION_ID == 2.0, # Verse: Groove A (Bass Arp)
+        BASS_TONE_A * 1.2,
+        select(
+            CURRENT_SECTION_ID == 3.0, # Chorus: Groove B (Chords + Sustained Bass)
+            CHORD_TONE_B + BASS_TONE_B,
+            select(
+                CURRENT_SECTION_ID == 4.0, # Bridge: Groove C (Climactic Arp)
+                LEAD_TONE_C + LEAD_DELAY_C,
+                select(
+                    CURRENT_SECTION_ID == 5.0, # Outro: Simple sustained E3 tone fades out
+                    sub_bass(E3_FREQ, 1.0) * lerp(1.0, 0.0, (time - DRUMS_FADE_END) / (SECTION_DURATION * 4.0)),
+                    0.0 # Safety default
+                )
+            )
+        )
+    )
+) * 0.8
 
-# Output with simple stereo delay
-output.0 = delay(master_out, 0.2, 0.5) * 0.5 + master_out * 0.5 
-output.1 = delay(master_out, 0.25, 0.5) * 0.5 + master_out * 0.5
+# --- Final Mix & Output ---
+
+MASTER_DRY = DRUMS_MASTER_OUT + MUSIC_OUT
+MASTER_WET = reverb(MASTER_DRY, 0.7, 0.5)
+
+# Final Mixdown (Stereo)
+FINAL_MIX = limit(MASTER_DRY * 0.6 + MASTER_WET * 0.4)
+
+# Output Assignment
+output.0 = FINAL_MIX
+output.1 = FINAL_MIX
+
+# --- Debugging ---
+# PROBE the current section ID every 4 bars to confirm structure is followed
+PROBE_SECTION = probe(CURRENT_SECTION_ID, 1.0 / SECTION_DURATION)

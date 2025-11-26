@@ -23,7 +23,10 @@
 #endif
 
 typedef struct ss_window_t ss_window_t;
-typedef struct ss_audio_t ss_audio_t;
+
+typedef struct ss_audio_t {
+    int s_rate; 
+} ss_audio_t;
 
 typedef struct ss_input_t {
     int key_st[256];
@@ -98,7 +101,9 @@ struct ss_window_t {
     int running;
 };
 
-struct ss_audio_t {
+struct ss_audio_internal {
+    int s_rate; 
+
     ss_thread_t a_thread;
     int running;
 
@@ -116,13 +121,13 @@ struct ss_audio_t {
     HANDLE hEvt_c;
     UINT32 buf_fr_c_c;
 
-    int s_rate;
     int n_ch;
     ss_audio_cb_t play_cb;
     ss_audio_cb_t rec_cb;
     void *udata;
     int buf_frames;
 };
+
 
 static LRESULT CALLBACK ss_window_proc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     ss_window_t *wnd = (ss_window_t *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
@@ -170,9 +175,9 @@ ss_window_t *ss_open_window(int w, int h, const char *title) {
     RECT rect;
     DWORD dwStyle;
 
-    wnd = (ss_window_t *)malloc(sizeof(ss_window_t));
+    wnd = (ss_window_t *)malloc(sizeof(struct ss_window_t));
     if (!wnd) return NULL;
-    memset(wnd, 0, sizeof(ss_window_t));
+    memset(wnd, 0, sizeof(struct ss_window_t));
 
     wc.cbSize = sizeof(WNDCLASSEX);
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -268,16 +273,23 @@ ss_input_t ss_get_input(ss_window_t *wnd) {
 }
 
 static unsigned long __stdcall ss_was_thread(void *arg) {
-    ss_audio_t *a = (ss_audio_t *)arg;
+    struct ss_audio_internal *a;
     UINT32 pad;
     UINT32 n_avail;
     BYTE *pData;
     HRESULT hr;
-    int p_active = a->play_cb != NULL;
-    int r_active = a->rec_cb != NULL;
+    int p_active;
+    int r_active;
     HANDLE w_hndl[2];
     DWORD w_res;
-    int n_w_hndl = 0;
+    int n_w_hndl;
+    UINT32 n_to_read;
+    DWORD flags;
+
+    a = (struct ss_audio_internal *)arg;
+    p_active = a->play_cb != NULL;
+    r_active = a->rec_cb != NULL;
+    n_w_hndl = 0;
 
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
 
@@ -307,9 +319,7 @@ static unsigned long __stdcall ss_was_thread(void *arg) {
         }
 
         if (r_active && (w_res == WAIT_OBJECT_0 + (p_active ? 1 : 0))) {
-            UINT32 n_to_read;
-            DWORD flags;
-
+            
             hr = IAudioCaptureClient_GetNextPacketSize(a->pCC, &n_to_read);
             if (FAILED(hr)) break;
 
@@ -332,8 +342,22 @@ static unsigned long __stdcall ss_was_thread(void *arg) {
     return 0;
 }
 
+const char* HResultToString(HRESULT hr) {
+    switch (hr) {
+        case S_OK: return "S_OK";
+        case E_FAIL: return "E_FAIL";
+        case E_INVALIDARG: return "E_INVALIDARG";
+        case AUDCLNT_E_DEVICE_INVALIDATED: return "AUDCLNT_E_DEVICE_INVALIDATED";
+        case AUDCLNT_E_UNSUPPORTED_FORMAT: return "AUDCLNT_E_UNSUPPORTED_FORMAT";
+        case AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED: return "AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED";
+        case AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED: return "AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED";
+        default: return "Unknown HRESULT";
+    }
+}
+
+
 static HRESULT ss_was_init(
-    ss_audio_t *a,
+    struct ss_audio_internal *a,
     EDataFlow flow,
     AUDCLNT_SHAREMODE mode,
     IAudioClient **ppAC,
@@ -341,57 +365,140 @@ static HRESULT ss_was_init(
     HANDLE *phEvt,
     void **ppClient
 ) {
-    WAVEFORMATEX wfx;
-    REFERENCE_TIME hnsReqDur = (REFERENCE_TIME)a->buf_frames * 10000000L / a->s_rate;
-    IMMDevice *pDev = (flow == eRender) ? a->pDev_p : a->pDev_c;
+    WAVEFORMATEX *pWfx_mix = NULL;
+    WAVEFORMATEX *pWfx_use = NULL;
+    WAVEFORMATEX wfx_candidate = {0};
+    REFERENCE_TIME hnsReqDur;
+    IMMDevice *pDev;
     HRESULT hr;
+    
+    // --- 1. Activate IAudioClient ---
+    pDev = (flow == eRender) ? a->pDev_p : a->pDev_c;
 
-    if (!pDev) return S_FALSE;
-
+    if (!pDev) {
+        fprintf(stderr, "[SS_AUDIO_ERROR] Device pointer is NULL for flow %s.\n", (flow == eRender) ? "eRender" : "eCapture");
+        return S_FALSE;
+    }
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Activating IAudioClient for device...\n");
     hr = IMMDevice_Activate(pDev, &IID_IAudioClient, CLSCTX_ALL, NULL, (void **)ppAC);
-    if (FAILED(hr)) return hr;
+    if (FAILED(hr)) {
+        fprintf(stderr, "[SS_AUDIO_ERROR] IMMDevice_Activate failed: %s (0x%lX)\n", HResultToString(hr), hr);
+        return hr;
+    }
+    fprintf(stderr, "[SS_AUDIO_DEBUG] IAudioClient activated.\n");
 
-    memset(&wfx, 0, sizeof(WAVEFORMATEX));
-    wfx.wFormatTag = WAVE_FORMAT_PCM;
-    wfx.nChannels = (WORD)a->n_ch;
-    wfx.nSamplesPerSec = (DWORD)a->s_rate;
-    wfx.wBitsPerSample = 16;
-    wfx.nBlockAlign = wfx.nChannels * wfx.wBitsPerSample / 8;
-    wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
-    wfx.cbSize = 0;
+    // --- 2. Query Mix Format (System Default) ---
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Querying Mix Format...\n");
+    hr = IAudioClient_GetMixFormat(*ppAC, &pWfx_mix);
+    if (FAILED(hr)) { 
+        fprintf(stderr, "[SS_AUDIO_ERROR] GetMixFormat failed: %s (0x%lX)\n", HResultToString(hr), hr);
+        IAudioClient_Release(*ppAC); *ppAC = NULL; return hr; 
+    }
+    
+    // Set Chronos context parameters based on Mix Format
+    a->s_rate = (int)pWfx_mix->nSamplesPerSec; 
+    a->n_ch = pWfx_mix->nChannels; 
+    
+    if (a->s_rate != 44100) {
+        fprintf(stderr, "[SS_AUDIO_WARN] System is using %d Hz Mix Rate. Chronos context will be updated.\n", a->s_rate);
+    }
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Device Mix Format: Rate=%d Hz, Channels=%d, Bits=%d\n", 
+            a->s_rate, a->n_ch, pWfx_mix->wBitsPerSample);
 
+    // --- 3. Try 16-bit PCM (Preferred for short* buffer) ---
+    // Construct a candidate format: 16-bit PCM, using the device's actual rate and channel count.
+    wfx_candidate.wFormatTag = WAVE_FORMAT_PCM;
+    wfx_candidate.nChannels = a->n_ch;
+    wfx_candidate.nSamplesPerSec = a->s_rate;
+    wfx_candidate.wBitsPerSample = 16;
+    wfx_candidate.nBlockAlign = wfx_candidate.nChannels * (wfx_candidate.wBitsPerSample / 8);
+    wfx_candidate.nAvgBytesPerSec = wfx_candidate.nSamplesPerSec * wfx_candidate.nBlockAlign;
+    wfx_candidate.cbSize = 0; // Not using WAVEFORMATEXTENSIBLE here
+
+    // Check if the 16-bit PCM format is supported
+    hr = IAudioClient_IsFormatSupported(*ppAC, mode, &wfx_candidate, &pWfx_use);
+    
+    if (hr == S_OK) {
+        // --- 4a. 16-bit PCM Supported ---
+        // The simple 16-bit format is supported (often necessary if the system mix is 24/32-bit float).
+        fprintf(stderr, "[SS_AUDIO_DEBUG] 16-bit PCM format supported. Using candidate format.\n");
+        pWfx_use = &wfx_candidate;
+    } else {
+        // --- 4b. Use Mix Format (Let system handle conversion) ---
+        // If 16-bit is not directly supported, use the original mix format. WASAPI should handle
+        // the required conversion (e.g., 24-bit system mix -> 16-bit app buffer).
+        fprintf(stderr, "[SS_AUDIO_DEBUG] 16-bit PCM not directly supported (HR: 0x%lX). Falling back to Mix Format.\n", hr);
+        pWfx_use = pWfx_mix;
+    }
+    
+    // --- 5. Calculate Duration and Initialize ---
+    // Use the actual device rate (a->s_rate) for the required duration.
+    hnsReqDur = (REFERENCE_TIME)a->buf_frames * 10000000L / a->s_rate; 
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Requested Buffer Duration: %lldns\n", hnsReqDur);
+
+
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Creating Event Handle...\n");
     *phEvt = CreateEvent(NULL, FALSE, FALSE, NULL);
-    if (!*phEvt) { IAudioClient_Release(*ppAC); *ppAC = NULL; return E_FAIL; }
+    if (!*phEvt) { 
+        CoTaskMemFree(pWfx_mix); IAudioClient_Release(*ppAC); *ppAC = NULL; return E_FAIL; 
+    }
 
-    hr = IAudioClient_Initialize(*ppAC, mode, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, hnsReqDur, 0, &wfx, NULL);
-    if (FAILED(hr)) { CloseHandle(*phEvt); *phEvt = NULL; IAudioClient_Release(*ppAC); *ppAC = NULL; return hr; }
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Initializing IAudioClient...\n");
+    // Initialize with the chosen format (pWfx_use)
+    hr = IAudioClient_Initialize(*ppAC, mode, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, hnsReqDur, 0, pWfx_use, NULL);
+    
+    CoTaskMemFree(pWfx_mix); // Free the mix format memory
+    if (pWfx_use != &wfx_candidate && pWfx_use != pWfx_mix) CoTaskMemFree(pWfx_use); // Free format supported memory if needed
 
+    if (FAILED(hr)) { 
+        fprintf(stderr, "[SS_AUDIO_ERROR] IAudioClient_Initialize failed: %s (0x%lX)\n", HResultToString(hr), hr);
+        CloseHandle(*phEvt); *phEvt = NULL; IAudioClient_Release(*ppAC); *ppAC = NULL; return hr; 
+    }
+    fprintf(stderr, "[SS_AUDIO_DEBUG] IAudioClient initialized successfully.\n");
+
+
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Setting Event Handle...\n");
     hr = IAudioClient_SetEventHandle(*ppAC, *phEvt);
-    if (FAILED(hr)) { CloseHandle(*phEvt); *phEvt = NULL; IAudioClient_Release(*ppAC); *ppAC = NULL; return hr; }
+    if (FAILED(hr)) { 
+        fprintf(stderr, "[SS_AUDIO_ERROR] SetEventHandle failed: %s (0x%lX)\n", HResultToString(hr), hr);
+        CloseHandle(*phEvt); *phEvt = NULL; IAudioClient_Release(*ppAC); *ppAC = NULL; return hr; 
+    }
 
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Getting Buffer Size...\n");
     hr = IAudioClient_GetBufferSize(*ppAC, pBufFrCount);
-    if (FAILED(hr)) { CloseHandle(*phEvt); *phEvt = NULL; IAudioClient_Release(*ppAC); *ppAC = NULL; return hr; }
+    if (FAILED(hr)) { 
+        fprintf(stderr, "[SS_AUDIO_ERROR] GetBufferSize failed: %s (0x%lX)\n", HResultToString(hr), hr);
+        CloseHandle(*phEvt); *phEvt = NULL; IAudioClient_Release(*ppAC); *ppAC = NULL; return hr; 
+    }
 
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Getting Service Client...\n");
     if (flow == eRender) {
         hr = IAudioClient_GetService(*ppAC, &IID_IAudioRenderClient, ppClient);
     } else {
         hr = IAudioClient_GetService(*ppAC, &IID_IAudioCaptureClient, ppClient);
     }
     
-    if (FAILED(hr)) { CloseHandle(*phEvt); *phEvt = NULL; IAudioClient_Release(*ppAC); *ppAC = NULL; return hr; }
+    if (FAILED(hr)) { 
+        fprintf(stderr, "[SS_AUDIO_ERROR] GetService failed: %s (0x%lX)\n", HResultToString(hr), hr);
+        CloseHandle(*phEvt); *phEvt = NULL; IAudioClient_Release(*ppAC); *ppAC = NULL; return hr; 
+    }
     
+    fprintf(stderr, "[SS_AUDIO_DEBUG] ss_was_init finished successfully.\n");
     return hr;
 }
 
-
 ss_audio_t *ss_open_audio(ss_audio_cb_t play_cb, ss_audio_cb_t rec_cb, int s_rate, int n_ch, int buf_frames, void *udata) {
-    ss_audio_t *a;
+    struct ss_audio_internal *a;
     HRESULT hr;
     
-    a = (ss_audio_t *)malloc(sizeof(ss_audio_t));
-    if (!a) return NULL;
-    memset(a, 0, sizeof(ss_audio_t));
-
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Entering ss_open_audio. Attempting allocation...\n");
+    a = (struct ss_audio_internal *)malloc(sizeof(struct ss_audio_internal)); 
+    if (!a) { 
+        fprintf(stderr, "[SS_AUDIO_ERROR] Failed to allocate ss_audio_internal memory.\n");
+        return NULL; 
+    }
+    
+    /* FIX: Initializer list fix */
     a->s_rate = s_rate;
     a->n_ch = n_ch;
     a->play_cb = play_cb;
@@ -399,62 +506,114 @@ ss_audio_t *ss_open_audio(ss_audio_cb_t play_cb, ss_audio_cb_t rec_cb, int s_rat
     a->udata = udata;
     a->buf_frames = buf_frames;
     a->running = 1;
+    a->a_thread = NULL;
+    a->pEnum = NULL;
+    a->pDev_p = NULL;
+    a->pDev_c = NULL;
+    a->pAC_p = NULL;
+    a->pRC = NULL;
+    a->hEvt_p = NULL;
+    a->pAC_c = NULL;
+    a->pCC = NULL;
+    a->hEvt_c = NULL;
 
-    hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
-    if (FAILED(hr)) { free(a); return NULL; }
 
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Initializing COM with COINIT_APARTMENTTHREADED...\n");
+    hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED); 
+    if (FAILED(hr)) { 
+        fprintf(stderr, "[SS_AUDIO_ERROR] CoInitializeEx failed: %s (0x%lX)\n", HResultToString(hr), hr);
+        free(a); 
+        return NULL; 
+    }
+    fprintf(stderr, "[SS_AUDIO_DEBUG] CoInitializeEx successful.\n");
+
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Creating IMMDeviceEnumerator instance...\n");
     hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &IID_IMMDeviceEnumerator, (void**)&a->pEnum);
-    if (FAILED(hr)) { CoUninitialize(); free(a); return NULL; }
+    if (FAILED(hr)) { 
+        fprintf(stderr, "[SS_AUDIO_ERROR] CoCreateInstance IMMDeviceEnumerator failed: %s (0x%lX)\n", HResultToString(hr), hr);
+        CoUninitialize(); 
+        free(a); 
+        return NULL; 
+    }
+    fprintf(stderr, "[SS_AUDIO_DEBUG] IMMDeviceEnumerator created successfully.\n");
 
     if (play_cb) {
+        fprintf(stderr, "[SS_AUDIO_DEBUG] Getting Playback (eRender) default endpoint...\n");
         hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(a->pEnum, eRender, eConsole, &a->pDev_p);
-        if (FAILED(hr)) { ss_close_audio(a); return NULL; }
-
+        if (FAILED(hr)) { 
+            fprintf(stderr, "[SS_AUDIO_ERROR] GetDefaultAudioEndpoint eRender failed: %s (0x%lX)\n", HResultToString(hr), hr);
+            ss_close_audio((ss_audio_t*)a); 
+            return NULL; 
+        }
+        
         hr = ss_was_init(a, eRender, AUDCLNT_SHAREMODE_SHARED, &a->pAC_p, &a->buf_fr_c_p, &a->hEvt_p, (void**)&a->pRC);
-        if (FAILED(hr)) { ss_close_audio(a); return NULL; }
+        if (FAILED(hr)) { 
+            fprintf(stderr, "[SS_AUDIO_ERROR] Playback initialization failed. Check ss_was_init errors above.\n");
+            ss_close_audio((ss_audio_t*)a); 
+            return NULL; 
+        }
     }
 
     if (rec_cb) {
+        fprintf(stderr, "[SS_AUDIO_DEBUG] Getting Capture (eCapture) default endpoint...\n");
         hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(a->pEnum, eCapture, eConsole, &a->pDev_c);
-        if (FAILED(hr)) { ss_close_audio(a); return NULL; }
+        if (FAILED(hr)) { 
+            fprintf(stderr, "[SS_AUDIO_ERROR] GetDefaultAudioEndpoint eCapture failed: %s (0x%lX)\n", HResultToString(hr), hr);
+            ss_close_audio((ss_audio_t*)a); 
+            return NULL; 
+        }
 
         hr = ss_was_init(a, eCapture, AUDCLNT_SHAREMODE_SHARED, &a->pAC_c, &a->buf_fr_c_c, &a->hEvt_c, (void**)&a->pCC);
-        if (FAILED(hr)) { ss_close_audio(a); return NULL; }
+        if (FAILED(hr)) { 
+            fprintf(stderr, "[SS_AUDIO_ERROR] Capture initialization failed. Check ss_was_init errors above.\n");
+            ss_close_audio((ss_audio_t*)a); 
+            return NULL; 
+        }
     }
 
-    if (play_cb) IAudioClient_Start(a->pAC_p);
-    if (rec_cb) IAudioClient_Start(a->pAC_c);
+    if (play_cb && a->pAC_p) { fprintf(stderr, "[SS_AUDIO_DEBUG] Starting Playback stream.\n"); IAudioClient_Start(a->pAC_p); }
+    if (rec_cb && a->pAC_c) { fprintf(stderr, "[SS_AUDIO_DEBUG] Starting Capture stream.\n"); IAudioClient_Start(a->pAC_c); }
 
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Creating audio thread...\n");
     a->a_thread = ss_thread_create(ss_was_thread, a);
-    if (!a->a_thread) { ss_close_audio(a); return NULL; }
+    if (!a->a_thread) { 
+        fprintf(stderr, "[SS_AUDIO_ERROR] Failed to create audio thread.\n");
+        ss_close_audio((ss_audio_t*)a); 
+        return NULL; 
+    }
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Exiting ss_open_audio successfully.\n");
 
-    return a;
+
+    return (ss_audio_t*)a;
 }
 
 void ss_close_audio(ss_audio_t *a) {
-    if (!a) return;
+    struct ss_audio_internal *internal_a = (struct ss_audio_internal*)a;
+    if (!internal_a) return;
 
-    a->running = 0;
-    if (a->a_thread) ss_thread_join(a->a_thread);
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Closing audio system...\n");
+    internal_a->running = 0;
+    if (internal_a->a_thread) ss_thread_join(internal_a->a_thread);
 
-    if (a->pAC_p) IAudioClient_Stop(a->pAC_p);
-    if (a->pAC_c) IAudioClient_Stop(a->pAC_c);
+    if (internal_a->pAC_p) IAudioClient_Stop(internal_a->pAC_p);
+    if (internal_a->pAC_c) IAudioClient_Stop(internal_a->pAC_c);
 
-    if (a->hEvt_p) CloseHandle(a->hEvt_p);
-    if (a->hEvt_c) CloseHandle(a->hEvt_c);
+    if (internal_a->hEvt_p) CloseHandle(internal_a->hEvt_p);
+    if (internal_a->hEvt_c) CloseHandle(internal_a->hEvt_c);
 
-    if (a->pRC) IAudioRenderClient_Release(a->pRC);
-    if (a->pCC) IAudioCaptureClient_Release(a->pCC);
+    if (internal_a->pRC) IAudioRenderClient_Release(internal_a->pRC);
+    if (internal_a->pCC) IAudioCaptureClient_Release(internal_a->pCC);
 
-    if (a->pAC_p) IAudioClient_Release(a->pAC_p);
-    if (a->pAC_c) IAudioClient_Release(a->pAC_c);
+    if (internal_a->pAC_p) IAudioClient_Release(internal_a->pAC_p);
+    if (internal_a->pAC_c) IAudioClient_Release(internal_a->pAC_c);
 
-    if (a->pDev_p) IMMDevice_Release(a->pDev_p);
-    if (a->pDev_c) IMMDevice_Release(a->pDev_c);
-    if (a->pEnum) IMMDeviceEnumerator_Release(a->pEnum);
+    if (internal_a->pDev_p) IMMDevice_Release(internal_a->pDev_p);
+    if (internal_a->pDev_c) IMMDevice_Release(internal_a->pDev_c);
+    if (internal_a->pEnum) IMMDeviceEnumerator_Release(internal_a->pEnum);
 
     CoUninitialize();
-    free(a);
+    free(internal_a);
+    fprintf(stderr, "[SS_AUDIO_DEBUG] Audio system closed.\n");
 }
 
 #endif
@@ -475,7 +634,9 @@ struct ss_window_t {
     int running;
 };
 
-struct ss_audio_t {
+struct ss_audio_internal {
+    int s_rate; 
+
     ss_thread_t a_thread;
     int running;
 
@@ -483,7 +644,6 @@ struct ss_audio_t {
     snd_pcm_t *rec_h;
     snd_pcm_uframes_t buf_frames;
 
-    int s_rate;
     int n_ch;
     ss_audio_cb_t play_cb;
     ss_audio_cb_t rec_cb;
@@ -501,9 +661,9 @@ ss_window_t *ss_open_window(int w, int h, const char *title) {
     int depth;
     Atom wm_del_wnd;
 
-    wnd = (ss_window_t *)malloc(sizeof(ss_window_t));
+    wnd = (ss_window_t *)malloc(sizeof(struct ss_window_t));
     if (!wnd) return NULL;
-    memset(wnd, 0, sizeof(ss_window_t));
+    memset(wnd, 0, sizeof(struct ss_window_t));
 
     wnd->disp = XOpenDisplay(NULL);
     if (!wnd->disp) {
@@ -569,68 +729,22 @@ void ss_close_window(ss_window_t *wnd) {
 }
 
 int ss_process_events(ss_window_t *wnd) {
-    XEvent evt;
-    KeySym keysym;
-
-    while (XPending(wnd->disp)) {
-        XNextEvent(wnd->disp, &evt);
-        switch (evt.type) {
-            case ClientMessage:
-                if ((Atom)evt.xclient.data.l[0] == XInternAtom(wnd->disp, "WM_DELETE_WINDOW", False)) {
-                    wnd->running = 0;
-                }
-                break;
-            case KeyPress:
-                keysym = XLookupKeysym(&evt.xkey, 0);
-                if (keysym < SS_KEY_MAX) wnd->input.key_st[(int)keysym] = 1;
-                break;
-            case KeyRelease:
-                keysym = XLookupKeysym(&evt.xkey, 0);
-                if (keysym < SS_KEY_MAX) wnd->input.key_st[(int)keysym] = 0;
-                break;
-            case ButtonPress:
-                if (evt.xbutton.button == 1) wnd->input.mouse_l = 1;
-                if (evt.xbutton.button == 3) wnd->input.mouse_r = 1;
-                break;
-            case ButtonRelease:
-                if (evt.xbutton.button == 1) wnd->input.mouse_l = 0;
-                if (evt.xbutton.button == 3) wnd->input.mouse_r = 0;
-                break;
-            case MotionNotify:
-                wnd->input.mouse_x = evt.xmotion.x;
-                wnd->input.mouse_y = evt.xmotion.y;
-                break;
-            case ConfigureNotify:
-                if (evt.xconfigure.width != wnd->w || evt.xconfigure.height != wnd->h) {
-                    wnd->w = evt.xconfigure.width;
-                    wnd->h = evt.xconfigure.height;
-                    if (wnd->xim) {
-                        if (wnd->xim->data) free(wnd->xim->data);
-                        XDestroyImage(wnd->xim);
-                    }
-                    wnd->xim = XCreateImage(
-                        wnd->disp, DefaultVisual(wnd->disp, wnd->scr), DefaultDepth(wnd->disp, wnd->scr), ZPixmap, 0,
-                        (char *)malloc(wnd->w * wnd->h * 4), wnd->w, wnd->h, 32, 0
-                    );
-                }
-                break;
-            default:
-                break;
-        }
+    MSG msg;
+    while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
     }
-
     return wnd->running;
 }
 
 void ss_blit_fb(ss_window_t *wnd, unsigned char *fb, int w, int h) {
-    if (wnd->xim->width != w || wnd->xim->height != h) {
-        if (wnd->xim->data) free(wnd->xim->data);
-        XDestroyImage(wnd->xim);
-        wnd->xim = XCreateImage(wnd->disp, DefaultVisual(wnd->disp, wnd->scr), DefaultDepth(wnd->disp, wnd->scr), ZPixmap, 0, (char *)malloc(w * h * 4), w, h, 32, 0);
-    }
-    memcpy(wnd->xim->data, fb, w * h * 4);
-    XPutImage(wnd->disp, wnd->wnd, wnd->gc, wnd->xim, 0, 0, 0, 0, w, h);
-    XFlush(wnd->disp);
+    RECT client_rect;
+    GetClientRect(wnd->hwnd, &client_rect);
+    wnd->w = client_rect.right;
+    wnd->h = client_rect.bottom;
+    wnd->bmi.bmiHeader.biWidth = w;
+    wnd->bmi.bmiHeader.biHeight = -h;
+    StretchDIBits(wnd->hdc_wnd, 0, 0, wnd->w, wnd->h, 0, 0, w, h, fb, &wnd->bmi, DIB_RGB_COLORS, SRCCOPY);
 }
 
 ss_input_t ss_get_input(ss_window_t *wnd) {
@@ -682,9 +796,12 @@ static int ss_alsa_setup(snd_pcm_t **h, const char *dev, int acc, int s_rate, in
 }
 
 static void *ss_alsa_thread(void *arg) {
-    ss_audio_t *a = (ss_audio_t *)arg;
-    int rc_p = 0;
-    int rc_c = 0;
+    struct ss_audio_internal *a = (struct ss_audio_internal *)arg;
+    int rc_p;
+    int rc_c;
+
+    rc_p = 0;
+    rc_c = 0;
     
     while (a->running) {
         if (a->play_cb) {
@@ -710,13 +827,15 @@ static void *ss_alsa_thread(void *arg) {
 }
 
 ss_audio_t *ss_open_audio(ss_audio_cb_t play_cb, ss_audio_cb_t rec_cb, int s_rate, int n_ch, int buf_frames, void *udata) {
-    ss_audio_t *a;
-    snd_pcm_uframes_t alsa_frames = (snd_pcm_uframes_t)buf_frames;
+    struct ss_audio_internal *a;
+    snd_pcm_uframes_t alsa_frames;
     
-    a = (ss_audio_t *)malloc(sizeof(ss_audio_t));
+    alsa_frames = (snd_pcm_uframes_t)buf_frames;
+    
+    a = (struct ss_audio_internal *)malloc(sizeof(struct ss_audio_internal));
     if (!a) return NULL;
-    memset(a, 0, sizeof(ss_audio_t));
-
+    
+    /* FIX: Initializer list fix */
     a->s_rate = s_rate;
     a->n_ch = n_ch;
     a->play_cb = play_cb;
@@ -726,30 +845,37 @@ ss_audio_t *ss_open_audio(ss_audio_cb_t play_cb, ss_audio_cb_t rec_cb, int s_rat
     a->buf_frames = alsa_frames;
     a->buf_size_b = buf_frames * n_ch * sizeof(short);
 
+    a->a_thread = NULL;
+    a->play_h = NULL;
+    a->rec_h = NULL;
+    a->play_buf = NULL;
+    a->rec_buf = NULL;
+
+
     if (play_cb) {
         if (ss_alsa_setup(&a->play_h, "default", SND_PCM_STREAM_PLAYBACK, s_rate, n_ch, &alsa_frames) < 0) {
-            ss_close_audio(a);
+            ss_close_audio((ss_audio_t*)a);
             return NULL;
         }
         a->buf_frames = alsa_frames;
         a->buf_size_b = (int)a->buf_frames * n_ch * sizeof(short);
         a->play_buf = (short *)malloc(a->buf_size_b);
         if (!a->play_buf) {
-            ss_close_audio(a);
+            ss_close_audio((ss_audio_t*)a);
             return NULL;
         }
     }
 
     if (rec_cb) {
         if (ss_alsa_setup(&a->rec_h, "default", SND_PCM_STREAM_CAPTURE, s_rate, n_ch, &alsa_frames) < 0) {
-            ss_close_audio(a);
+            ss_close_audio((ss_audio_t*)a);
             return NULL;
         }
         a->buf_frames = alsa_frames;
         a->buf_size_b = (int)a->buf_frames * n_ch * sizeof(short);
         a->rec_buf = (short *)malloc(a->buf_size_b);
         if (!a->rec_buf) {
-            ss_close_audio(a);
+            ss_close_audio((ss_audio_t*)a);
             return NULL;
         }
         snd_pcm_start(a->rec_h);
@@ -761,32 +887,30 @@ ss_audio_t *ss_open_audio(ss_audio_cb_t play_cb, ss_audio_cb_t rec_cb, int s_rat
     }
 
     a->a_thread = ss_thread_create(ss_alsa_thread, a);
-    if (!a->a_thread) { ss_close_audio(a); return NULL; }
+    if (!a->a_thread) { ss_close_audio((ss_audio_t*)a); return NULL; }
         
-    return a;
+    return (ss_audio_t*)a;
 }
 
 void ss_close_audio(ss_audio_t *a) {
-    if (!a) return;
-    
-    a->running = 0;
-    if (a->a_thread) ss_thread_join(a->a_thread);
-    
-    if (a->play_h) {
-        snd_pcm_close(a->play_h);
-        if (a->play_buf) free(a->play_buf);
+    struct ss_audio_internal *internal_a = (struct ss_audio_internal*)a;
+    if (!internal_a) return;
+
+    internal_a->running = 0;
+    if (internal_a->a_thread) ss_thread_join(internal_a->a_thread);
+
+    if (internal_a->play_h) {
+        snd_pcm_close(internal_a->play_h);
+        if (internal_a->play_buf) free(internal_a->play_buf);
     }
     
-    if (a->rec_h) {
-        snd_pcm_close(a->rec_h);
-        if (a->rec_buf) free(a->rec_buf);
+    if (internal_a->rec_h) {
+        snd_pcm_close(internal_a->rec_h);
+        if (internal_a->rec_buf) free(internal_a->rec_buf);
     }
     
-    free(a);
+    free(internal_a);
 }
-
 #endif
-
 #endif
-
 #endif
