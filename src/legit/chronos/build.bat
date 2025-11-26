@@ -1,0 +1,1 @@
+gcc main.c -o chronos.exe -lm -lwinmm -lole32 -lgdi32
