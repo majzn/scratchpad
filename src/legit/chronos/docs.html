@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chronos v8.3 DSP Manual</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+    <style>
+        /* Custom styles for the documentation theme */
+        :root {
+            --bg-dark: #1f2937; /* Gray-800 */
+            --bg-light: #2c3e50; /* Slightly lighter dark */
+            --text-light: #f3f4f6; /* Gray-100 */
+            --text-accent: #60a5fa; /* Blue-400 */
+            --code-bg: #111827; /* Gray-900 */
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-light);
+            scroll-behavior: smooth;
+        }
+        .code-block {
+            background-color: var(--code-bg);
+            border-left: 4px solid var(--text-accent);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 1.5rem;
+            border-radius: 0.5rem;
+            overflow: hidden;
+        }
+        th, td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid #374151; /* Gray-700 */
+        }
+        th {
+            background-color: var(--bg-light);
+            color: var(--text-accent);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+        }
+        .section-header {
+            border-bottom: 2px solid var(--text-accent);
+            padding-bottom: 0.5rem;
+            margin-top: 2rem;
+        }
+        .sidebar a:hover {
+            color: var(--text-accent);
+            background-color: #374151;
+        }
+        .anchor-link {
+            text-decoration: none;
+            color: inherit;
+        }
+        .anchor-link:hover .icon {
+            opacity: 1;
+        }
+        .icon {
+            opacity: 0;
+            transition: opacity 0.2s;
+            margin-left: 0.5rem;
+        }
+    </style>
+</head>
+<body class="antialiased">
+
+    <!-- Sticky Navigation Sidebar (Hidden on Mobile, Flex on Desktop) -->
+    <nav id="sidebar" class="fixed top-0 left-0 w-64 h-full bg-gray-900 p-6 shadow-2xl hidden lg:block overflow-y-auto">
+        <h2 class="text-xl font-bold text-gray-50 mb-6 border-b border-gray-700 pb-2">Chronos v8.3 Docs</h2>
+        <div class="sidebar space-y-2 text-sm">
+            <h3 class="font-semibold text-gray-400 mt-4 mb-2">C API & Core</h3>
+            <a class="block p-2 rounded-md transition duration-150 text-gray-300" href="#api-functions">API Functions</a>
+            <a class="block p-2 rounded-md transition duration-150 text-gray-300" href="#core-constants">Core Constants</a>
+            <a class="block p-2 rounded-md transition duration-150 text-gray-300" href="#logging-levels">Logging Levels</a>
+
+            <h3 class="font-semibold text-gray-400 mt-4 mb-2">Scripting Language</h3>
+            <a class="block p-2 rounded-md transition duration-150 text-gray-300" href="#syntax-variables">Syntax & Vars</a>
+            <a class="block p-2 rounded-md transition duration-150 text-gray-300" href="#macros-def">Macros (`def`)</a>
+            <a class="block p-2 rounded-md transition duration-150 text-gray-300" href="#buffer-management">Buffers & Arrays</a>
+
+            <h3 class="font-semibold text-gray-400 mt-4 mb-2">DSP Opcodes</h3>
+            <a class="block p-2 rounded-md transition duration-150 text-gray-300" href="#opcodes-timing">Timing & Seq</a>
+            <a class="block p-2 rounded-md transition duration-150 text-gray-300" href="#opcodes-oscillators">Oscillators</a>
+            <a class="block p-2 rounded-md transition duration-150 text-gray-300" href="#opcodes-filters">Filters & EQ</a>
+            <a class="block p-2 rounded-md transition duration-150 text-gray-300" href="#opcodes-dynamics">Envelope & Dynamics</a>
+            <a class="block p-2 rounded-md transition duration-150 text-gray-300" href="#opcodes-effects">Effects & PM</a>
+            <a class="block p-2 rounded-md transition duration-150 text-gray-300" href="#opcodes-math">Math & Logic</a>
+            <a class="block p-2 rounded-md transition duration-150 text-gray-300" href="#opcodes-chaos">Chaos Generators</a>
+        </div>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="lg:ml-64 p-6 md:p-10">
+        <header class="mb-10 text-center lg:text-left">
+            <h1 class="text-4xl font-extrabold text-white">CHRONOS v8.3 DSP MANUAL</h1>
+            <p class="mt-2 text-lg text-gray-400">Comprehensive reference for the Chronos C API and Scripting Language.</p>
+        </header>
+
+        <!-- SECTION 1: C API AND CORE DEFINITIONS -->
+        <section id="c-api" class="mb-10">
+            <h2 id="api-functions" class="text-3xl font-bold section-header">1. C API Functions</h2>
+            <p class="mt-4 text-gray-300">These functions are used in host C/C++ code to manage the Chronos VM and audio lifecycle.</p>
+            <table class="mt-4">
+                <thead>
+                    <tr>
+                        <th>Function</th>
+                        <th>Synopsis</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>`cr_create_context`</td>
+                        <td>`cr_context *cr_create_context(void)`</td>
+                        <td>Initializes context, memory arena (64MB), and synchronization lock. Returns NULL on failure. [cite: uploaded file: chronos.h]</td>
+                    </tr>
+                    <tr>
+                        <td>`cr_destroy_context`</td>
+                        <td>`void cr_destroy_context(cr_context *ctx)`</td>
+                        <td>Frees all resources associated with the context. [cite: uploaded file: chronos.h]</td>
+                    </tr>
+                    <tr>
+                        <td>`cr_run`</td>
+                        <td>`int cr_run(cr_context *ctx, const char *script)`</td>
+                        <td>Parses script, compiles DSP graph, resets memory arena, and topologically sorts nodes. Returns 1 on success. [cite: uploaded file: chronos.h]</td>
+                    </tr>
+                    <tr>
+                        <td>`cr_process`</td>
+                        <td>`double cr_process(cr_context *ctx, int channel)`</td>
+                        <td>The sample processing loop. Executes the full graph for channel 0, reads for subsequent channels. [cite: uploaded file: chronos.h]</td>
+                    </tr>
+                    <tr>
+                        <td>`cr_lock` / `cr_unlock`</td>
+                        <td>`void cr_lock(ctx)` / `void cr_unlock(ctx)`</td>
+                        <td>Acquires/releases the internal lock. Use to protect `cr_run` calls from the audio thread. [cite: uploaded file: chronos.h]</td>
+                    </tr>
+                    <tr>
+                        <td>`cr_set_log_level`</td>
+                        <td>`void cr_set_log_level(ctx, level)`</td>
+                        <td>Sets verbosity (CR_LOG_NONE to CR_LOG_DEBUG). [cite: uploaded file: chronos.h]</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3 id="core-constants" class="text-2xl font-semibold mt-8 mb-4">1.2 Core Constants</h3>
+            <table class="mt-4">
+                <thead>
+                    <tr>
+                        <th>Constant</th>
+                        <th>Value</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>`CR_MAX_CHANNELS`</td><td>2</td><td>Maximum audio output channels (Stereo). [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`CR_SR`</td><td>44100.0</td><td>System Sample Rate in Hertz. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`CR_ARENA_SIZE`</td><td>64 MB</td><td>Dedicated memory pool for delay lines and large buffers. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`CR_PI`</td><td>3.14159...</td><td>Mathematical constant Pi. [cite: uploaded file: chronos.h]</td></tr>
+                </tbody>
+            </table>
+
+            <h3 id="logging-levels" class="text-2xl font-semibold mt-8 mb-4">1.3 Logging Levels (`cr_log_level`)</h3>
+            <table class="mt-4">
+                <thead>
+                    <tr>
+                        <th>Level</th>
+                        <th>Value</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>`CR_LOG_NONE`</td><td>0</td><td>Mute all output. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`CR_LOG_ERROR`</td><td>1</td><td>Only logs fatal errors. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`CR_LOG_WARN`</td><td>2</td><td>Errors and warnings (Default). [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`CR_LOG_INFO`</td><td>3</td><td>General compilation status. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`CR_LOG_DEBUG`</td><td>4</td><td>Detailed parsing trace. [cite: uploaded file: chronos.h]</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- SECTION 2: SCRIPTING LANGUAGE FEATURES -->
+        <section id="scripting-language" class="mb-10">
+            <h2 id="syntax-variables" class="text-3xl font-bold section-header">2. Scripting Language Syntax</h2>
+            
+            <h3 class="text-2xl font-semibold mt-8 mb-4">2.1 Variables and Output</h3>
+            <ul class="list-disc list-inside space-y-2 text-gray-300 pl-4">
+                <li>**Assignment:** `variable_name = expression` [cite: uploaded file: chronos.h]</li>
+                <li>**Comments:** Use `#` for single-line comments. [cite: uploaded file: chronos.h]</li>
+                <li>**Global Time:** Use the reserved variable `time` to get the current time in seconds (read-only). [cite: uploaded file: chronos.h]</li>
+                <li>**Output:** Set audio outputs using `out` or `output.0` (Left) and `output.1` (Right). [cite: uploaded file: chronos.h]</li>
+            </ul>
+
+            <h3 id="macros-def" class="text-2xl font-semibold mt-8 mb-4">2.2 Macros (`def` / `return`)</h3>
+            <p class="text-gray-300">Macros are statically expanded functions for code reuse.</p>
+            <div class="code-block mt-4">
+                <pre><code>def fm_osc(carrier_freq, modulation_amount) {
+    return sine(phasor(carrier_freq) + sine(phasor(modulation_amount)))
+}
+
+output.0 = fm_osc(440, 100) * 0.5</code></pre>
+            </div>
+
+            <h3 id="buffer-management" class="text-2xl font-semibold mt-8 mb-4">2.3 Buffer Management and Arrays</h3>
+            <p class="text-gray-300">Used for storing static data and loaded audio files.</p>
+            <table class="mt-4">
+                <thead>
+                    <tr>
+                        <th>Function</th>
+                        <th>Args</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>`array`</td><td>`val1, val2, ...`</td><td>Creates a static buffer. **Arguments must be constant numeric literals.** Returns the buffer ID. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`load`</td><td>`"file.wav"[, phase]`</td><td>Loads a WAV file. Returns sample value at `phase` (0.0 to 1.0). If `phase` is omitted, it loops based on global `time`. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`get`</td><td>`buffer_id, index`</td><td>Reads value at `index`. Index is clamped to bounds. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`get_wrap`</td><td>`buffer_id, index`</td><td>Reads value at `index`, using modulo wrapping logic. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`set`</td><td>`buffer_id, index, value`</td><td>Writes `value` to the buffer at `index`. Returns `value`. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`len`</td><td>`buffer_id`</td><td>Returns the length (number of frames) of the buffer as a double. [cite: uploaded file: chronos.h]</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- SECTION 3: DSP OPCODES -->
+        <section id="dsp-opcodes" class="mb-10">
+            <h2 class="text-3xl font-bold section-header">3. DSP Opcodes (Built-in Functions)</h2>
+            <p class="mt-4 text-gray-300">The core DSP building blocks, used to construct the signal graph.</p>
+
+            <h3 id="opcodes-timing" class="text-2xl font-semibold mt-8 mb-4">3.1 Timing and Sequence Control</h3>
+            <table class="mt-4">
+                <thead>
+                    <tr>
+                        <th>Function</th>
+                        <th>Args</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>`seq`</td><td>`step_time, val1, ...`</td><td>Outputs values in sequence, holding each for `step_time` seconds, then loops. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`count`</td><td>`trig, reset`</td><td>Increments persistent counter on `trig`'s rising edge. Resets if `reset > 0.5`. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`sah`</td><td>`signal, trigger`</td><td>Sample and Hold. Holds `signal` value, updates on `trigger` rising edge. [cite: uploaded file: chronos.h]</td></tr>
+                </tbody>
+            </table>
+            
+            <h3 id="opcodes-oscillators" class="text-2xl font-semibold mt-8 mb-4">3.2 Oscillators and Generators</h3>
+            <table class="mt-4">
+                <thead>
+                    <tr>
+                        <th>Function</th>
+                        <th>Args</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>`phasor`</td><td>`freq`</td><td>Saw-wave phase ramp (0.0 to 1.0) at `freq` (Hz). [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`sine`</td><td>`phase`</td><td>Standard sine wave (output -1.0 to 1.0). [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`noise`</td><td>(None)</td><td>White noise generator (output -1.0 to 1.0). [cite: uploaded file: chronos.h]</td></tr>
+                </tbody>
+            </table>
+
+            <h3 id="opcodes-filters" class="text-2xl font-semibold mt-8 mb-4">3.3 Filters and Equalization</h3>
+            <table class="mt-4">
+                <thead>
+                    <tr>
+                        <th>Function</th>
+                        <th>Args</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>`lpf`</td><td>`signal, cutoff`</td><td>Simple 1-pole Low-Pass Filter. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`filter`</td><td>`signal, type, freq, Q`</td><td>Bi-Quad filter. `type`: **1=LPF**, **2=HPF**, **3=BPF**. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`eq`</td><td>`signal, freq, gain_db, Q`</td><td>Peaking Equalizer filter. [cite: uploaded file: chronos.h]</td></tr>
+                </tbody>
+            </table>
+
+            <h3 id="opcodes-dynamics" class="text-2xl font-semibold mt-8 mb-4">3.4 Envelope and Dynamics</h3>
+            <table class="mt-4">
+                <thead>
+                    <tr>
+                        <th>Function</th>
+                        <th>Args</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>`adsr`</td><td>`gate, attack, decay`</td><td>Simplified envelope: full sustain, fast release. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`compress`</td><td>`signal, thresh_db, ratio, ar`</td><td>Dynamics compressor. `ar` is the attack rate. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`tanh`</td><td>`signal`</td><td>Soft clipper / tube saturation effect ($\tanh(x)$). [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`slew`</td><td>`target, time`</td><td>Slew limiter. Ramps current value to `target` over `time`. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`clip` / `limit`</td><td>`signal`</td><td>Hard clipping: clamped to [-1.0, 1.0]. [cite: uploaded file: chronos.h]</td></tr>
+                </tbody>
+            </table>
+
+            <h3 id="opcodes-effects" class="text-2xl font-semibold mt-8 mb-4">3.5 Effects and Physical Modeling</h3>
+            <table class="mt-4">
+                <thead>
+                    <tr>
+                        <th>Function</th>
+                        <th>Args</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>`delay`</td><td>`signal, time, feedback`</td><td>Interpolated delay line. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`reverb`</td><td>`signal, size, feedback`</td><td>Room reverb effect. `size` scales internal delay times. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`fold`</td><td>`signal, threshold`</td><td>Wavefolding distortion effect. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`wave`</td><td>`excite, damp, speed, pos`</td><td>1D Wave-guide physical model. [cite: uploaded file: chronos.h]</td></tr>
+                </tbody>
+            </table>
+
+            <h3 id="opcodes-math" class="text-2xl font-semibold mt-8 mb-4">3.6 Math, Logic, and Utility</h3>
+            <table class="mt-4">
+                <thead>
+                    <tr>
+                        <th>Function</th>
+                        <th>Args</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>`mtof`</td><td>`midi_note`</td><td>MIDI note number to frequency (Hz) conversion. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`lerp`</td><td>`a, b, amt`</td><td>Linear interpolation: $a + (b - a) \times \text{amt}$. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`select`</td><td>`cond, a, b`</td><td>Conditional logic: If `cond` > 0.5, returns `a`, else returns `b`. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`floor`, `ceil`, `abs`, `sign`</td><td>`value`</td><td>Standard numerical functions. [cite: uploaded file: chronos.h]</td></tr>
+                </tbody>
+            </table>
+
+            <h3 id="opcodes-chaos" class="text-2xl font-semibold mt-8 mb-4">3.7 Chaos Generators</h3>
+            <table class="mt-4">
+                <thead>
+                    <tr>
+                        <th>Function</th>
+                        <th>Args</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>`logistic`</td><td>`r, trigger`</td><td>Logistic Map generator. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`henon`</td><td>`trigger`</td><td>Henon Map generator. [cite: uploaded file: chronos.h]</td></tr>
+                    <tr><td>`wolfram`</td><td>`rule, trigger`</td><td>Wolfram 1D Cellular Automata (CA) using `rule` (0-255). [cite: uploaded file: chronos.h]</td></tr>
+                </tbody>
+            </table>
+
+            <h2 class="text-3xl font-bold section-header mt-12">4. Code Snippets</h2>
+            <p class="mt-4 text-gray-300">Easily copy-pasteable examples for common tasks.</p>
+
+            <h3 class="text-xl font-semibold mt-4 mb-2">4.1 Simple Synth Voice</h3>
+            <div class="code-block">
+                <pre><code># Sine wave with an envelope triggered every 0.25 seconds
+beat = 60.0 / 120.0 # 120 BPM
+gate = seq(beat / 4, 1, 0, 0, 0) # Hits every 16th note
+env = adsr(gate, 0.01, 0.5)
+
+freq_val = mtof(60) # C4
+lfo = sine(phasor(0.1)) * 5 # Slow, wide vibrato
+
+output.0 = sine(phasor(freq_val + lfo)) * env * 0.4</code></pre>
+            </div>
+
+            <h3 class="text-xl font-semibold mt-4 mb-2">4.2 Rhythmic Noise Gate (Hi-Hat)</h3>
+            <div class="code-block">
+                <pre><code># Open and close a high-hat every 8th note
+beat = 60.0 / 100.0
+hat_gate = seq(beat/2, 1, 0)
+hat_env = adsr(hat_gate, 0.005, 0.1)
+
+# Use High-Pass Filter (type 2) to shape the noise
+output.0 = filter(noise() * hat_env, 2, 6000, 0.8) * 0.2</code></pre>
+            </div>
+
+        </section>
+    </main>
+
+    <script>
+        // Simple script to handle mobile navigation (show/hide sidebar)
+        // Since we are in a single HTML file, we'll ensure the main content is visible.
+        // On large screens, the main margin pushes content past the sidebar.
+        // On small screens, the margin is ignored.
+    </script>
+</body>
+</html>

@@ -51,7 +51,7 @@ CR_API void cr_unlock(cr_context *ctx);
 #define CR_MAX_SYMBOLS 1024
 #define CR_MAX_NODES 16384
 #define CR_MAX_BUFFERS 128
-#define CR_MAX_ARGS 16
+#define CR_MAX_ARGS 64
 #define CR_MAX_FUNCS 256
 #define CR_MAX_MACROS 256
 #define CR_MAX_MACRO_SIZE 8192
