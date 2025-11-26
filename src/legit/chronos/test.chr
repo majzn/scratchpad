@@ -1,0 +1,146 @@
+#
+# CHRONOS SCRIPT: Fugue of the Stellar Clock
+# Structure: 48 Bars (A: 1-16, B: 17-32, A': 33-48)
+# Focus: Contrapuntal melodies, layered pads, and complex rhythmic structure.
+#
+# CRITICAL FIXES: Replaced complex, unstable 'string_ensemble' and 'lead_smooth'
+#                 with simple, highly stable 'pad_warm' and LPF-based equivalents.
+#
+
+# --- 1. GLOBAL PARAMETERS & CLOCKS ---
+BPM = 100.0
+ROOT_NOTE = 55.0 # G Minor
+TOTAL_BARS = 48.0
+
+# Core Clocks
+main_clock = beat(BPM)
+bar_clock = bar(BPM)
+quarter_trig = trig(quarter_note(BPM))
+eighth_trig = trig(eighth_note(BPM))
+sixteenth_trig = trig(sixteenth_note(BPM))
+
+# Structure and Modulation Control
+bar_count = count(trig(bar_clock), 0.0)
+section_A = bar_count < 16.0
+section_B = bar_count >= 16.0 && bar_count < 32.0
+section_A_prime = bar_count >= 32.0
+
+# Harmonic Progression (Gm7 - Cm7 - F7 - BbMaj7) - 4-bar cycle
+PROG_R = array(55.0, 53.0, 53.0, 58.0)  # G, F, F, Bb
+PROG_M3 = array(58.0, 56.0, 56.0, 62.0) # Bb, Eb, Eb, D (Note: D is M3 of Bb)
+PROG_P5 = array(62.0, 60.0, 60.0, 65.0) # D, G, G, F
+PROG_M7 = array(65.0, 63.0, 63.0, 69.0) # F, Bb, Bb, A (M7 of Bb)
+PROG_EXT = array(67.0, 67.0, 67.0, 70.0) # A (9th), D (11th), D (11th), C (9th)
+
+prog_step = floor(bar_count / 4.0) % len(PROG_R) # Change every 4 bars
+
+# --- 2. DYNAMIC CONTROL ---
+
+# Dynamic Modulation (Builds across the B section)
+dynamic_mod_b = select(section_B > 0.5, map_range(bar_count, 16.0, 32.0, 0.5, 1.0), 1.0)
+dynamic_mod_global = slew(dynamic_mod_b, 4.0)
+
+# --- 3. HARMONIC LAYERS (Chord Pads - NOW STABLE) ---
+
+pad_trig = trig(bar_clock / 2.0) # Hold for 2 bars
+
+# Voicing 1 (Replaced String Ensemble with stable Pad_Warm)
+pad1_r = pad_warm(get(PROG_R, prog_step), pad_trig)
+pad1_m3 = pad_warm(get(PROG_M3, prog_step), pad_trig)
+pad1_p5 = pad_warm(get(PROG_P5, prog_step), pad_trig)
+# Further gain reduction on the chord stack
+pad1_fx = mix3(pad1_r, pad1_m3, pad1_p5, 0.1, 0.1, 0.08)
+pad1_fx = pad1_fx * dynamic_mod_global * 0.7
+pad1_fx = reverb_room(pad1_fx) * 0.5
+
+# Voicing 2 (Warm Pad) - M7, Ext
+pad2_m7 = pad_warm(get(PROG_M7, prog_step), pad_trig)
+pad2_ext = pad_warm(get(PROG_EXT, prog_step), pad_trig)
+pad2_fx = mix_equal(pad2_m7, pad2_ext) * 0.2
+pad2_fx = pad2_fx * dynamic_mod_global * 0.5
+
+pads_mix = pad1_fx + pad2_fx
+
+# --- 4. RHYTHM SECTION ---
+
+# Rhythmic activity is reduced in B section
+drums_active = select(section_B > 0.5, 0.2, 1.0)
+
+# Kick Drum: Simple 4/4
+kick_trig = main_clock * on_beat(quarter_note(BPM), 1.0) # Every beat
+# GAIN REDUCTION: 0.8 -> 0.6
+kick_fx = kick_909(kick_trig) * 0.6 * drums_active
+
+# Snare/Clap: On 2 and 4
+snare_trig = on_beat(half_note(BPM), 2.0)
+snare_fx = snare_clap(snare_trig) * 0.4 * drums_active # GAIN REDUCTION: 0.6 -> 0.4
+
+# Hi-Hat: Driving 16ths
+hh_trig = trig(sixteenth_note(BPM))
+hh_fx = hat_closed(hh_trig) * 0.2 * drums_active # GAIN REDUCTION: 0.3 -> 0.2
+
+drums_mix = mix3(kick_fx, snare_fx, hh_fx, 1.0, 1.0, 1.0) * dynamic_mod_global
+
+# --- 5. CONTRAPUNTAL MELODIES ---
+
+# 5A. Main Bass (Low, Rhythmic Counterpoint)
+bass_trig = trig(eighth_note(BPM) / 2.0) # Dotted quarter pulse
+bass_note = get(PROG_R, prog_step) - 12.0
+bass_fx = bass_sub(bass_note, bass_trig) * 1.0
+
+# 5B. Fugue Arpeggio (Fast, Intricate, only active in A/A')
+arp_active = select(section_B > 0.5, 0.0, 1.0)
+arp_clock = sixteenth_note(BPM) * 1.5 # Dotted 16ths poly-rhythm
+arp_scale = minor_scale(0.0) # Use G minor offsets
+arp_offset = arp_updown(arp_clock, arp_scale)
+arp_note = get(PROG_R, prog_step) + 12.0 + arp_offset
+
+pluck_fx = pluck_bright(arp_note, trig(arp_clock)) * 0.3 * arp_active # GAIN REDUCTION
+pluck_fx = clip(pluck_fx) 
+
+# 5C. Contrapunto Pad (Slow, Sustained Melody - REPLACED UNSTABLE LEAD_SMOOTH)
+contrapunto_active = select(section_B > 0.5 || section_A_prime > 0.5, 1.0, 0.0)
+contrapunto_clock = bar_clock / 4.0 # Holds notes for 4 bars
+
+# Melody (Scale degrees in Gm: R, 4th, m3, 5th, m7, 6th, m3) - 8 steps = 32 bars cycle
+contrapunto_offsets = array(0.0, 5.0, 3.0, 7.0, 10.0, 9.0, 3.0, 0.0)
+contrapunto_step = floor(bar_count / 4.0) % len(contrapunto_offsets)
+contrapunto_note = get(PROG_R, prog_step) + 24.0 + get(contrapunto_offsets, contrapunto_step)
+
+# MANUAL STABLE LEAD: Sawtooth -> Slow LPF -> AR Envelope
+contrapunto_osc = saw(mtof(contrapunto_note))
+contrapunto_env = ar(trig(contrapunto_clock), 0.1, 0.6)
+contrapunto_filtered = lpf(contrapunto_osc * contrapunto_env, 1500.0) # Stable LPF instead of complex filter
+contrapunto_fx = contrapunto_filtered * 0.5 * contrapunto_active # GAIN REDUCTION
+contrapunto_fx = chorus_light(contrapunto_fx) * 0.8
+
+melodic_mix = bass_fx + pluck_fx + contrapunto_fx
+
+# --- 6. FINAL MIXDOWN & MASTERING ---
+
+# Sidechain (Light ducking, focused on rhythmic energy)
+sidechain_sig = kick_fx * 1.5
+sidechained_mix = ducker(pads_mix + melodic_mix, sidechain_sig, 0.15) 
+
+# Global Mix
+master_unprocessed = drums_mix + sidechained_mix * 0.6 
+
+# MASTER FIX: Apply High-Pass Filter (Low Cut) to remove sub-bass accumulation before Reverb/Mastering
+master_pre_reverb = low_cut(master_unprocessed, 60.0)
+
+# Global Reverb Send (Massive Hall for space)
+rev_hall_wet = reverb_hall(master_pre_reverb) 
+rev_send_amount = 0.3
+
+final_out_center = master_pre_reverb * 0.9 + rev_hall_wet * rev_send_amount
+
+# Stereo Processing (Arpeggio is widened)
+final_L = final_out_center + autopan_l(pluck_fx, 0.1) * 0.1
+final_R = final_out_center + autopan_r(pluck_fx, 0.1) * 0.1
+
+# Final mastering stage: hard limit, then soft clip
+final_L_limited = limiter_simple(final_L * 1.2) 
+final_R_limited = limiter_simple(final_R * 1.2)
+
+output.0 = soft_clip(final_L_limited) 
+output.1 = soft_clip(final_R_limited)

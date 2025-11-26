@@ -1,0 +1,920 @@
+#
+# CHRONOS STUDIO LIBRARY (v2.0 - Stabilized for DSP Integrity)
+# CRITICAL FIXES:
+# 1. Reduced Reverb feedback ('fb') in hall/infinite macros to prevent oscillation.
+# 2. Reduced Q factor in hihat filter for stability and smoother transients.
+# 3. Confirmed scale macros return constant arrays.
+#
+
+# --- 1. TIME AND CLOCK UTILITIES ---
+
+def beat(bpm) {
+    return phasor(bpm / 60.0)
+}
+
+def bar(bpm) {
+    return phasor(bpm / 60.0 / 4.0)
+}
+
+def half_note(bpm) {
+    return phasor(bpm / 60.0 / 2.0)
+}
+
+def quarter_note(bpm) {
+    return phasor(bpm / 60.0)
+}
+
+def eighth_note(bpm) {
+    return phasor(bpm / 60.0 * 2.0)
+}
+
+def sixteenth_note(bpm) {
+    return phasor(bpm / 60.0 * 4.0)
+}
+
+def thirtysecond_note(bpm) {
+    return phasor(bpm / 60.0 * 8.0)
+}
+
+def triplet(bpm) {
+    return phasor(bpm / 60.0 * 3.0)
+}
+
+def dotted_quarter(bpm) {
+    return phasor(bpm / 60.0 * 0.666)
+}
+
+def dotted_eighth(bpm) {
+    return phasor(bpm / 60.0 * 1.333)
+}
+
+def trig(clock) {
+    return sah(1.0, clock)
+}
+
+def every_n(clock, n) {
+    t = trig(clock)
+    c = count(t, 0.0)
+    return c % n
+}
+
+def on_beat(clock, n) {
+    result = every_n(clock, n)
+    return select(result < 0.5, 1.0, 0.0)
+}
+
+def skip_beat(clock, n) {
+    result = every_n(clock, n)
+    return select(result > 0.5, 1.0, 0.0)
+}
+
+def clock_div(clock, divisor) {
+    trig_val = trig(clock)
+    counter = count(trig_val, 0.0)
+    divided = counter % divisor
+    return select(divided < 0.5, 1.0, 0.0)
+}
+
+def every_other(clock) {
+    return clock_div(clock, 2.0)
+}
+
+def every_third(clock) {
+    return clock_div(clock, 3.0)
+}
+
+def every_fourth(clock) {
+    return clock_div(clock, 4.0)
+}
+
+
+# --- 2. ENVELOPES (ADSR) ---
+
+def perc(trigger, decay) {
+    return adsr(trigger, 0.001, decay)
+}
+
+def ar(trigger, attack, release) {
+    return adsr(trigger, attack, release)
+}
+
+def pluck_env(trigger) {
+    return perc(trigger, 0.12)
+}
+
+def short_env(trigger) {
+    return perc(trigger, 0.05)
+}
+
+def med_env(trigger) {
+    return perc(trigger, 0.2)
+}
+
+def long_env(trigger) {
+    return perc(trigger, 0.5)
+}
+
+def pad_env(trigger) {
+    return ar(trigger, 0.5, 2.0)
+}
+
+
+# --- 3. OSCILLATORS & TONES ---
+
+def saw(freq) {
+    s1 = sine(phasor(freq))
+    s2 = sine(phasor(freq * 2.0)) * 0.5
+    s3 = sine(phasor(freq * 3.0)) * 0.333
+    s4 = sine(phasor(freq * 4.0)) * 0.25
+    return s1 + s2 + s3 + s4
+}
+
+def square(freq) {
+    s1 = sine(phasor(freq))
+    s3 = sine(phasor(freq * 3.0)) * 0.333
+    s5 = sine(phasor(freq * 5.0)) * 0.2
+    s7 = sine(phasor(freq * 7.0)) * 0.143
+    return s1 + s3 + s5 + s7
+}
+
+def triangle(freq) {
+    sq = square(freq)
+    return lpf(sq, freq * 4.0)
+}
+
+def pulse(freq, width) {
+    ph = phasor(freq)
+    return select(ph > width, 1.0, -1.0)
+}
+
+def fat_osc(freq, detune) {
+    o1 = sine(phasor(freq))
+    o2 = sine(phasor(freq * (1.0 + detune)))
+    o3 = sine(phasor(freq * (1.0 - detune)))
+    return (o1 + o2 + o3) * 0.333
+}
+
+def super_saw(freq) {
+    return fat_osc(freq, 0.02)
+}
+
+def sub_osc(freq) {
+    return sine(phasor(freq * 0.5))
+}
+
+def bell_tone(freq, brightness) {
+    f1 = sine(phasor(freq))
+    f2 = sine(phasor(freq * 2.76)) * brightness * 0.5
+    f3 = sine(phasor(freq * 5.4)) * brightness * 0.3
+    return f1 + f2 + f3
+}
+
+def simple_osc(freq) {
+    return sine(phasor(freq))
+}
+
+def rich_osc(freq) {
+    return saw(freq)
+}
+
+def warm_osc(freq) {
+    return triangle(freq)
+}
+
+
+# --- 4. PERCUSSION / DRUMS ---
+
+def kick_drum(trigger, pitch_start, pitch_end) {
+    env = perc(trigger, 0.15)
+    pitch = pitch_start + env * (pitch_end - pitch_start)
+    osc = sine(phasor(pitch))
+    return osc * perc(trigger, 0.2)
+}
+
+def kick_808(trigger) {
+    return kick_drum(trigger, 60.0, 30.0) * 0.8
+}
+
+def kick_909(trigger) {
+    return kick_drum(trigger, 55.0, 35.0) * 0.7
+}
+
+def kick_techno(trigger) {
+    env = perc(trigger, 0.15)
+    pitch = 60.0 + env * 30.0
+    osc = sine(phasor(pitch))
+    click = noise() * perc(trigger, 0.005) * 0.3
+    return (osc + click) * perc(trigger, 0.2) * 0.8
+}
+
+def snare_drum(trigger) {
+    n = noise() * 0.7
+    tone = sine(phasor(200.0)) * 0.3
+    mixed = n + tone
+    filt = filter(mixed, 2, 8000.0, 2.0)
+    return filt * perc(trigger, 0.08)
+}
+
+def snare_808(trigger) {
+    tone = sine(phasor(200.0)) * perc(trigger, 0.05)
+    noise_part = noise() * perc(trigger, 0.1)
+    filt = filter(noise_part, 2, 5000.0, 2.0)
+    return (tone * 0.3 + filt * 0.7) * 0.7
+}
+
+def snare_clap(trigger) {
+    n = noise()
+    env1 = perc(trigger, 0.05)
+    env2 = perc(trigger, 0.01) * 3.0
+    return n * env1 * (1.0 + env2) * 0.6
+}
+
+def hihat(trigger, openness) {
+    n = noise()
+    env_time = 0.02 + openness * 0.1
+    env = perc(trigger, env_time)
+    # FIX: Reduced Q from 5.0 to 3.0 for filter stability
+    filt = filter(n * env, 3, 10000.0, 3.0) 
+    return filt
+}
+
+def hat_closed(trigger) {
+    return hihat(trigger, 0.0)
+}
+
+def hat_open(trigger) {
+    return hihat(trigger, 0.8)
+}
+
+def hat_808(trigger, open) {
+    n = noise()
+    decay_time = 0.02 + open * 0.15
+    env = perc(trigger, decay_time)
+    filt = filter(n, 2, 8000.0, 4.0)
+    return filt * env * 0.5
+}
+
+def clap(trigger) {
+    n = noise()
+    env1 = perc(trigger, 0.05)
+    env2 = perc(trigger, 0.01) * 3.0
+    return n * env1 * (1.0 + env2)
+}
+
+def tom(trigger, pitch) {
+    env = perc(trigger, 0.3)
+    tone = sine(phasor(pitch + env * 50.0))
+    return tone * env
+}
+
+def rimshot(trigger) {
+    tone = sine(phasor(400.0)) * perc(trigger, 0.02)
+    click = noise() * perc(trigger, 0.005)
+    return (tone + click) * 0.6
+}
+
+def cymbal(trigger) {
+    n = noise()
+    env = perc(trigger, 0.4)
+    filt = filter(n, 2, 8000.0, 1.0)
+    return filt * env
+}
+
+def shaker(trigger) {
+    n = noise()
+    env = perc(trigger, 0.06)
+    filt = filter(n, 2, 12000.0, 3.0)
+    return filt * env * 0.4
+}
+
+def cowbell(trigger) {
+    t1 = sine(phasor(800.0))
+    t2 = sine(phasor(540.0))
+    mixed = (t1 + t2) * 0.5
+    env = perc(trigger, 0.15)
+    return mixed * env * 0.6
+}
+
+
+# --- 5. SYNTHS AND VOICES ---
+
+def bass_analog(note, gate, cutoff, resonance) {
+    freq = mtof(note)
+    osc = saw(freq)
+    env = ar(gate, 0.01, 0.3)
+    mod_cutoff = cutoff * (1.0 + env * 3.0)
+    filt = filter(osc, 1, mod_cutoff, resonance)
+    return filt * env
+}
+
+def bass_sub(note, gate) {
+    freq = mtof(note)
+    osc = sine(phasor(freq))
+    env = ar(gate, 0.01, 0.25)
+    return osc * env * 0.8
+}
+
+def bass_acid(note, gate, cutoff, resonance, accent) {
+    freq = mtof(note)
+    osc = saw(freq)
+    env = ar(gate, 0.005, 0.15)
+    mod = cutoff * (1.0 + env * 8.0 * accent)
+    filt = filter(osc, 1, mod, resonance)
+    return filt * env
+}
+
+def bass_fm(note, gate, mod_amount) {
+    freq = mtof(note)
+    modulator = sine(phasor(freq * 2.0)) * mod_amount
+    carrier = sine(phasor(freq + modulator * 200.0))
+    env = ar(gate, 0.01, 0.2)
+    return carrier * env * 0.7
+}
+
+def pluck_string(note, trigger) {
+    freq = mtof(note)
+    excite = noise() * perc(trigger, 0.01)
+    del_time = 1.0 / freq
+    resonance = delay(excite, del_time, 0.99)
+    filt = lpf(resonance, freq * 8.0)
+    return filt * 0.5
+}
+
+def pluck_bright(note, trigger) {
+    freq = mtof(note)
+    excite = noise() * perc(trigger, 0.005)
+    del_time = 1.0 / freq
+    resonance = delay(excite, del_time, 0.98)
+    filt = lpf(resonance, freq * 12.0)
+    return filt * 0.6
+}
+
+def pluck_muted(note, trigger) {
+    freq = mtof(note)
+    excite = noise() * perc(trigger, 0.01)
+    del_time = 1.0 / freq
+    resonance = delay(excite, del_time, 0.95)
+    filt = lpf(resonance, freq * 4.0)
+    return filt * 0.4
+}
+
+def pad_synth(note, gate, brightness) {
+    freq = mtof(note)
+    osc = fat_osc(freq, 0.01)
+    cutoff = 2000.0 + brightness * 3000.0
+    filt = lpf(osc, cutoff)
+    env = ar(gate, 0.3, 1.5)
+    return filt * env * 0.3
+}
+
+def pad_warm(note, gate) {
+    return pad_synth(note, gate, 0.3)
+}
+
+def pad_bright(note, gate) {
+    return pad_synth(note, gate, 0.8)
+}
+
+def lead_synth(note, gate, vibrato_rate, vibrato_depth) {
+    freq = mtof(note)
+    vib = sine(phasor(vibrato_rate)) * vibrato_depth * 0.02
+    mod_freq = freq * (1.0 + vib)
+    osc = saw(mod_freq)
+    filt = filter(osc, 1, 2000.0, 2.0)
+    env = ar(gate, 0.05, 0.4)
+    return filt * env
+}
+
+def lead_sharp(note, gate) {
+    return lead_synth(note, gate, 0.0, 0.0)
+}
+
+def lead_smooth(note, gate) {
+    return lead_synth(note, gate, 5.0, 0.5)
+}
+
+def organ_tone(note, gate, drawbars) {
+    freq = mtof(note)
+    h1 = sine(phasor(freq)) * drawbars
+    h2 = sine(phasor(freq * 2.0)) * drawbars * 0.8
+    h3 = sine(phasor(freq * 3.0)) * drawbars * 0.6
+    env = ar(gate, 0.01, 0.5)
+    return (h1 + h2 + h3) * env
+}
+
+def brass_synth(note, gate, brightness) {
+    freq = mtof(note)
+    osc = saw(freq)
+    env = ar(gate, 0.1, 0.3)
+    cutoff = 1000.0 + env * brightness * 2000.0
+    filt = filter(osc, 1, cutoff, 3.0)
+    return filt * env
+}
+
+def fm_bell(note, trigger, brightness) {
+    freq = mtof(note)
+    carrier = sine(phasor(freq))
+    mod = sine(phasor(freq * 3.5)) * brightness
+    fm = sine(phasor(freq + mod * 100.0))
+    env = perc(trigger, 0.8)
+    return fm * env
+}
+
+def string_ensemble(note, gate) {
+    freq = mtof(note)
+    o1 = sine(phasor(freq))
+    o2 = sine(phasor(freq * 1.002))
+    o3 = sine(phasor(freq * 0.998))
+    detuned = (o1 + o2 + o3) * 0.333
+    env = ar(gate, 0.5, 2.0)
+    vib = sine(phasor(5.0)) * 0.005
+    vibrato = detuned * (1.0 + vib)
+    return vibrato * env * 0.6
+}
+
+
+# --- 6. SIGNAL SHAPING AND LFOs ---
+
+def lfo_sine(hz) {
+    return sine(phasor(hz))
+}
+
+def lfo_tri(hz) {
+    return phasor(hz) * 2.0 - 1.0
+}
+
+def lfo_saw(hz) {
+    return phasor(hz)
+}
+
+def lfo_square(hz) {
+    ph = phasor(hz)
+    return select(ph > 0.5, 1.0, -1.0)
+}
+
+def lfo_random(hz) {
+    return sah(noise(), phasor(hz))
+}
+
+def lfo_slow(hz) {
+    return lfo_sine(hz)
+}
+
+def lfo_fast(hz) {
+    return lfo_sine(hz)
+}
+
+def bi2uni(signal) {
+    return signal * 0.5 + 0.5
+}
+
+def uni2bi(signal) {
+    return signal * 2.0 - 1.0
+}
+
+def smooth_filter(signal, time) {
+    return lpf(signal, 1.0 / time)
+}
+
+def hpf_simple(signal, cutoff) {
+    return filter(signal, 2, cutoff, 1.0)
+}
+
+def bpf_simple(signal, center, q) {
+    return filter(signal, 3, center, q)
+}
+
+def low_cut(signal, freq) {
+    return hpf_simple(signal, freq)
+}
+
+def high_cut(signal, freq) {
+    return lpf(signal, freq)
+}
+
+def band_isolate(signal, freq, q) {
+    return bpf_simple(signal, freq, q)
+}
+
+
+# --- 7. EFFECTS ---
+
+def chorus_fx(signal, rate, depth) {
+    mod = sine(phasor(rate)) * depth * 0.01
+    delayed = delay(signal, 0.02 + mod, 0.0)
+    return (signal + delayed) * 0.5
+}
+
+def chorus_light(signal) {
+    return chorus_fx(signal, 0.5, 0.3)
+}
+
+def chorus_heavy(signal) {
+    return chorus_fx(signal, 1.5, 0.8)
+}
+
+def flanger_fx(signal, rate, depth, feedback) {
+    mod = sine(phasor(rate)) * depth * 0.005
+    delayed = delay(signal, 0.001 + mod, feedback)
+    return (signal + delayed) * 0.5
+}
+
+def flanger_light(signal) {
+    return flanger_fx(signal, 0.3, 0.5, 0.3)
+}
+
+def flanger_heavy(signal) {
+    return flanger_fx(signal, 1.0, 1.0, 0.7)
+}
+
+def tape_delay_fx(signal, time, feedback, flutter) {
+    mod = sine(phasor(flutter)) * 0.003
+    return delay(signal, time + mod, feedback)
+}
+
+def echo_quarter(signal, bpm, feedback) {
+    time = 60.0 / bpm
+    return delay(signal, time, feedback)
+}
+
+def echo_eighth(signal, bpm, feedback) {
+    time = 30.0 / bpm
+    return delay(signal, time, feedback)
+}
+
+def echo_dotted(signal, bpm, feedback) {
+    time = 90.0 / bpm
+    return delay(signal, time, feedback)
+}
+
+def slapback(signal) {
+    return delay(signal, 0.08, 0.3)
+}
+
+def bitcrush_fx(signal, rate) {
+    return sah(signal, phasor(rate))
+}
+
+def lofi(signal, bits) {
+    rate = 44100.0 / bits
+    return bitcrush_fx(signal, rate)
+}
+
+def ringmod_fx(signal, freq) {
+    return signal * sine(phasor(freq))
+}
+
+def dist_soft(signal, amount) {
+    return tanh(signal * amount)
+}
+
+def dist_hard(signal, amount) {
+    return clip(signal * amount)
+}
+
+def dist_fold(signal, amount) {
+    return fold(signal * amount, 1.0)
+}
+
+def overdrive(signal) {
+    return dist_soft(signal, 2.0)
+}
+
+def fuzz(signal) {
+    return dist_hard(signal, 3.0)
+}
+
+def saturate(signal) {
+    return dist_soft(signal, 1.5)
+}
+
+def tremolo_fx(signal, rate, depth) {
+    mod = bi2uni(sine(phasor(rate)))
+    return signal * (1.0 - depth * (1.0 - mod))
+}
+
+def tremolo_slow(signal) {
+    return tremolo_fx(signal, 4.0, 0.5)
+}
+
+def tremolo_fast(signal) {
+    return tremolo_fx(signal, 8.0, 0.7)
+}
+
+def autopan_l(signal, rate) {
+    return signal * (0.5 + sine(phasor(rate)) * 0.5)
+}
+
+def autopan_r(signal, rate) {
+    return signal * (0.5 - sine(phasor(rate)) * 0.5)
+}
+
+def reverb_small(signal) {
+    return reverb(signal, 0.7, 0.5)
+}
+
+def reverb_room(signal) {
+    return reverb(signal, 0.85, 0.7)
+}
+
+def reverb_hall(signal) {
+    # FIX: Reduced feedback from 0.8 to 0.75 for stability
+    return reverb(signal, 0.95, 0.75) 
+}
+
+def reverb_plate(signal) {
+    return reverb(signal, 0.9, 0.9)
+}
+
+def reverb_infinite(signal) {
+    # FIX: Reduced feedback from 0.95 to 0.85 for stability
+    return reverb(signal, 0.99, 0.85)
+}
+
+def ducker(signal, sidechain, amount) {
+    reduction = slew(abs(sidechain), 0.01) * amount
+    return signal * (1.0 - reduction)
+}
+
+def compressor_simple(signal, threshold) {
+    return compress(signal, threshold, 4.0, 0.01)
+}
+
+def limiter_simple(signal) {
+    return limit(signal)
+}
+
+def soft_clip(signal) {
+    return tanh(signal)
+}
+
+def hard_clip(signal) {
+    return clip(signal)
+}
+
+
+# --- 8. MIXING, GAIN, AND UTILITIES ---
+
+def mix2(a, b, a_level, b_level) {
+    return a * a_level + b * b_level
+}
+
+def mix3(a, b, c, a_lvl, b_lvl, c_lvl) {
+    return a * a_lvl + b * b_lvl + c * c_lvl
+}
+
+def mix4(a, b, c, d, a_lvl, b_lvl, c_lvl, d_lvl) {
+    return a * a_lvl + b * b_lvl + c * c_lvl + d * d_lvl
+}
+
+def mix_equal(a, b) {
+    return (a + b) * 0.5
+}
+
+def blend(a, b, amount) {
+    return a * (1.0 - amount) + b * amount
+}
+
+def xfade(a, b, position) {
+    return a * (1.0 - position) + b * position
+}
+
+def pan_l(signal, position) {
+    return signal * (1.0 - position)
+}
+
+def pan_r(signal, position) {
+    return signal * position
+}
+
+def center(signal) {
+    return signal
+}
+
+def wide_l(signal) {
+    return signal * 1.2
+}
+
+def wide_r(signal) {
+    return signal * 1.2
+}
+
+def send_fx(dry, wet, amount) {
+    return dry + wet * amount
+}
+
+def parallel_mix(dry, wet, blend_amount) {
+    return xfade(dry, wet, blend_amount)
+}
+
+def gain(signal, amount_db) {
+    linear = amount_db / 20.0
+    return signal * linear
+}
+
+def boost(signal) {
+    return signal * 2.0
+}
+
+def cut(signal) {
+    return signal * 0.5
+}
+
+def mute(signal) {
+    return signal * 0.0
+}
+
+def solo(signal, others) {
+    return signal
+}
+
+def fade_in(signal, trigger, time) {
+    return signal * slew(trigger, time)
+}
+
+def fade_out(signal, trigger, time) {
+    return signal * slew(1.0 - trigger, time)
+}
+
+
+# --- 9. PITCH AND SEQUENCING ---
+
+def scale_note(root, scale_array, degree) {
+    idx = floor(degree) % len(scale_array)
+    offset = get(scale_array, idx)
+    return root + offset
+}
+
+def arp_up(clock, scale_array) {
+    trig_val = trig(clock)
+    step = count(trig_val, 0.0) % len(scale_array)
+    return get(scale_array, step)
+}
+
+def arp_down(clock, scale_array) {
+    trig_val = trig(clock)
+    step = count(trig_val, 0.0) % len(scale_array)
+    idx = len(scale_array) - 1.0 - step
+    return get(scale_array, idx)
+}
+
+def arp_random(clock, scale_array) {
+    trig_val = trig(clock)
+    rnd = abs(sah(noise(), trig_val))
+    idx = floor(rnd * len(scale_array))
+    return get(scale_array, idx)
+}
+
+def arp_updown(clock, scale_array) {
+    trig_val = trig(clock)
+    total_steps = len(scale_array) * 2.0
+    step = count(trig_val, 0.0) % total_steps
+    going_up = step < len(scale_array)
+    up_idx = step
+    down_idx = total_steps - step - 1.0
+    idx = select(going_up > 0.5, up_idx, down_idx)
+    return get(scale_array, idx)
+}
+
+def seq_step(clock, scale_array, step_num) {
+    return get(scale_array, floor(step_num) % len(scale_array))
+}
+
+def quantize_to_scale(value, scale_array) {
+    idx = floor(abs(value)) % len(scale_array)
+    return get(scale_array, idx)
+}
+
+def octave_up(note) {
+    return note + 12.0
+}
+
+def octave_down(note) {
+    return note - 12.0
+}
+
+def transpose(note, semitones) {
+    return note + semitones
+}
+
+# --- FIXED SCALE DEFINITIONS: Return constant offsets only ---
+def major_scale(root) {
+    return array(0.0, 2.0, 4.0, 5.0, 7.0, 9.0, 11.0)
+}
+
+def minor_scale(root) {
+    return array(0.0, 2.0, 3.0, 5.0, 7.0, 8.0, 10.0)
+}
+
+def penta_scale(root) {
+    return array(0.0, 2.0, 4.0, 7.0, 9.0)
+}
+# -------------------------------------------------------------
+
+
+# --- 10. MODULATION AND CHAOS ---
+
+def clamp_range(value, min_val, max_val) {
+    below = select(value < min_val, min_val, value)
+    return select(below > max_val, max_val, below)
+}
+
+def map_range(value, in_min, in_max, out_min, out_max) {
+    normalized = (value - in_min) / (in_max - in_min)
+    return out_min + normalized * (out_max - out_min)
+}
+
+def normalize(value) {
+    return clamp_range(value, -1.0, 1.0)
+}
+
+def invert(value) {
+    return value * -1.0
+}
+
+def half(value) {
+    return value * 0.5
+}
+
+def double(value) {
+    return value * 2.0
+}
+
+def prob_gate(trigger, probability) {
+    rnd = sah(noise(), trigger)
+    threshold = probability * 2.0 - 1.0
+    gate = select(trigger > 0.5, select(rnd < threshold, 1.0, 0.0), 0.0)
+    return gate
+}
+
+def random_chance(trigger, chance) {
+    return prob_gate(trigger, chance)
+}
+
+def coin_flip(trigger) {
+    return prob_gate(trigger, 0.5)
+}
+
+def mostly(trigger) {
+    return prob_gate(trigger, 0.75)
+}
+
+def rarely(trigger) {
+    return prob_gate(trigger, 0.25)
+}
+
+def drunk_walk(trigger, amount) {
+    rnd = sah(noise(), trigger)
+    return slew(rnd, amount)
+}
+
+def random_smooth(rate) {
+    return drunk_walk(phasor(rate), 1.0)
+}
+
+def chaos_logistic(rate, param) {
+    return logistic(param, phasor(rate))
+}
+
+def chaos_henon(rate) {
+    return henon(phasor(rate))
+}
+
+def chaos_wolfram(rule, rate) {
+    return wolfram(rule, phasor(rate))
+}
+
+def chaos_slow() {
+    return chaos_henon(0.1)
+}
+
+def chaos_medium() {
+    return chaos_henon(0.5)
+}
+
+def chaos_fast() {
+    return chaos_henon(2.0)
+}
+
+def ratchet(trigger, divisions) {
+    t = trig(trigger)
+    ratchet_clock = phasor(divisions * 20.0)
+    ratchet_trig = trig(ratchet_clock)
+    active = t > 0.5
+    return select(active > 0.5, ratchet_trig, 0.0)
+}
+
+def stutter(signal, trigger, amount) {
+    hold = sah(signal, trigger)
+    return select(trigger > 0.5, hold, signal)
+}
+
+def glitch_repeat(signal, clock, length) {
+    frozen = sah(signal, trig(clock))
+    return delay(frozen, length, 0.99)
+}
+
+def gate_open(signal, threshold) {
+    loud_enough = abs(signal) > threshold
+    return select(loud_enough > 0.5, signal, 0.0)
+}
