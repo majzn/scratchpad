@@ -74,7 +74,7 @@ enum {
   OP_LOGISTIC, OP_HENON, OP_WOLFRAM,
   OP_WAVE,
   OP_BARS, OP_BEAT, OP_SECTION,
-  OP_CAST_INT, OP_CAST_FLOAT
+  OP_PULSE, OP_CLOCK
 };
 
 typedef enum {
@@ -391,6 +391,38 @@ static cr_val run_node(cr_context *ctx, int idx) {
             break;
         }
         
+        case OP_PULSE: {
+            double freq = as_float(v[0]);
+            double dt = freq / ctx->sample_rate; 
+            double p = n->dsp.s[0];
+            double prev_p = p;
+            p += dt;
+            p -= floor(p);
+            n->dsp.s[0] = p;
+            out = make_float((p < prev_p) ? 1.0 : 0.0);
+            break;
+        }
+
+        case OP_CLOCK: {
+            double div = as_float(v[0]); 
+            double bpm = as_float(v[1]);
+            double freq;
+            double dt, p, prev_p;
+            
+            if (bpm < 0.1) bpm = 120.0;
+            if (div < 0.1) div = 4.0;
+            
+            freq = (bpm / 240.0) * div;
+            dt = freq / ctx->sample_rate;
+            p = n->dsp.s[0];
+            prev_p = p;
+            p += dt;
+            p -= floor(p);
+            n->dsp.s[0] = p;
+            out = make_float((p < prev_p) ? 1.0 : 0.0);
+            break;
+        }
+        
         case OP_NOISE:
             out = make_float(((double)rand() / (double)RAND_MAX) * 2.0 - 1.0);
             break;
@@ -650,8 +682,14 @@ static cr_val run_node(cr_context *ctx, int idx) {
             double val = n->dsp.s[1];
             double dt = 1.0/ctx->sample_rate; 
             double rate;
-            if (gate > 0.5 && state == 0) state = 1;
+            
+            /* If this is a trigger (pulse), reset on rising edge */
+            if (gate > 0.5 && state == 0) {
+                state = 1;
+                /* If release is not explicitly handled by gate=0, treat short gate as reset */
+            }
             if (gate < 0.5) state = 0;
+            
             if (state == 1) {
                 rate = 1.0 / (a + 0.001);
                 val += rate * dt;
@@ -1087,6 +1125,8 @@ static int factor(cr_context *ctx) {
                 if (!strcmp(name, "sine")) op = OP_SINE;
                 else if (!strcmp(name, "phasor")) op = OP_PHASOR;
                 else if (!strcmp(name, "noise")) op = OP_NOISE;
+                else if (!strcmp(name, "pulse")) op = OP_PULSE; 
+                else if (!strcmp(name, "clock")) op = OP_CLOCK; 
                 else if (!strcmp(name, "seq")) op = OP_SEQ;
                 else if (!strcmp(name, "pattern")) op = OP_PATTERN; 
                 else if (!strcmp(name, "lpf")) op = OP_LPF;
@@ -1131,6 +1171,11 @@ static int factor(cr_context *ctx) {
                     }
                 }
                 if (op == OP_SECTION && ac == 2) {
+                    int bpm = (ctx->bpm_node_idx != -1) ? ctx->bpm_node_idx : alloc_node(ctx, OP_CONST);
+                    ctx->node_pool[idx].inputs[ac++] = bpm;
+                }
+                if (op == OP_CLOCK && ac == 1) {
+                    /* Only division provided, auto-inject BPM */
                     int bpm = (ctx->bpm_node_idx != -1) ? ctx->bpm_node_idx : alloc_node(ctx, OP_CONST);
                     ctx->node_pool[idx].inputs[ac++] = bpm;
                 }
