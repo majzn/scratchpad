@@ -63,6 +63,7 @@ enum {
   OP_CONST, OP_LOAD, OP_STORE,
   OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, OP_POW,
   OP_GT, OP_LT, OP_GE, OP_LE, OP_EQ, OP_NE, OP_AND, OP_OR, OP_NOT,
+  OP_BIT_AND, OP_BIT_OR, OP_BIT_XOR, OP_BIT_NOT, OP_BIT_LSHIFT, OP_BIT_RSHIFT,
   OP_SINE, OP_PHASOR, OP_NOISE,
   OP_SEQ, OP_PATTERN, OP_LPF, OP_FILTER, OP_PEAK_EQ, 
   OP_DELAY, OP_REVERB, OP_COMPRESS, OP_LIMIT, OP_ADSR, OP_CLIP,
@@ -70,7 +71,7 @@ enum {
   OP_PROBE, OP_TIME, OP_READ, 
   OP_GET, OP_GET_WRAP, OP_SET, OP_COUNT, OP_LEN, OP_SELECT,
   OP_FLOOR, OP_CEIL, OP_ABS, OP_SIGN,
-  OP_MTOF, OP_LERP,
+  OP_MTOF, OP_LERP, OP_CLAMP, OP_MAP, OP_RANDOM,
   OP_LOGISTIC, OP_HENON, OP_WOLFRAM,
   OP_WAVE,
   OP_BARS, OP_BEAT, OP_SECTION,
@@ -298,7 +299,12 @@ static cr_val run_node(cr_context *ctx, int idx) {
             }
             break;
         case OP_MOD: 
-             out = make_float(fmod(as_float(v[0]), as_float(v[1])));
+             if (v[0].type == CR_INT && v[1].type == CR_INT) {
+                 if (v[1].as.i == 0) out = make_int(0);
+                 else out = make_int(v[0].as.i % v[1].as.i);
+             } else {
+                 out = make_float(fmod(as_float(v[0]), as_float(v[1])));
+             }
              break;
 
         case OP_POW: {
@@ -321,8 +327,16 @@ static cr_val run_node(cr_context *ctx, int idx) {
         case OP_OR:  out = make_int(as_int(v[0]) || as_int(v[1])); break;
         case OP_NOT: out = make_int(!as_int(v[0])); break;
         
+        case OP_BIT_AND: out = make_int(as_int(v[0]) & as_int(v[1])); break;
+        case OP_BIT_OR:  out = make_int(as_int(v[0]) | as_int(v[1])); break;
+        case OP_BIT_XOR: out = make_int(as_int(v[0]) ^ as_int(v[1])); break;
+        case OP_BIT_NOT: out = make_int(~as_int(v[0])); break;
+        case OP_BIT_LSHIFT: out = make_int(as_int(v[0]) << as_int(v[1])); break;
+        case OP_BIT_RSHIFT: out = make_int(as_int(v[0]) >> as_int(v[1])); break;
+
         case OP_SELECT: 
-            if (as_int(v[0])) out = v[1]; else out = v[2]; 
+            /* Treat any non-zero value as true */
+            if (as_int(v[0]) != 0) out = v[1]; else out = v[2]; 
             break;
             
         case OP_FLOOR: out = make_int((int)floor(as_float(v[0]))); break;
@@ -340,6 +354,32 @@ static cr_val run_node(cr_context *ctx, int idx) {
              double b = as_float(v[1]);
              double t = as_float(v[2]);
              out = make_float(a + (b - a) * t);
+             break;
+        }
+        case OP_CLAMP: {
+             double val = as_float(v[0]);
+             double min = as_float(v[1]);
+             double max = as_float(v[2]);
+             if (val < min) val = min;
+             if (val > max) val = max;
+             out = make_float(val);
+             break;
+        }
+        case OP_MAP: {
+             double val = as_float(v[0]);
+             double in_min = as_float(v[1]);
+             double in_max = as_float(v[2]);
+             double out_min = as_float(v[3]);
+             double out_max = as_float(v[4]);
+             double t = (val - in_min) / (in_max - in_min);
+             out = make_float(out_min + t * (out_max - out_min));
+             break;
+        }
+        case OP_RANDOM: {
+             double min = as_float(v[0]);
+             double max = as_float(v[1]);
+             double r = (double)rand() / (double)RAND_MAX;
+             out = make_float(min + r * (max - min));
              break;
         }
 
@@ -784,15 +824,23 @@ static void get_tok(cr_context *ctx) {
   } else if (isdigit(*ctx->src_ptr) || (*ctx->src_ptr == '-' && isdigit(ctx->src_ptr[1]))) {
     i = 0;
     ctx->token[i++] = *ctx->src_ptr++;
-    while (isdigit(*ctx->src_ptr)) ctx->token[i++] = *ctx->src_ptr++;
-    if (*ctx->src_ptr == '.') {
+    /* Check for hex: 0x... */
+    if (ctx->token[0] == '0' && (*ctx->src_ptr == 'x' || *ctx->src_ptr == 'X')) {
         ctx->token[i++] = *ctx->src_ptr++;
-        while (isdigit(*ctx->src_ptr)) ctx->token[i++] = *ctx->src_ptr++;
+        while (isxdigit(*ctx->src_ptr)) ctx->token[i++] = *ctx->src_ptr++;
         ctx->token[i] = 0;
-        ctx->token_type = 4; 
+        ctx->token_type = 2; /* Treat hex as int */
     } else {
-        ctx->token[i] = 0;
-        ctx->token_type = 2; 
+        while (isdigit(*ctx->src_ptr)) ctx->token[i++] = *ctx->src_ptr++;
+        if (*ctx->src_ptr == '.') {
+            ctx->token[i++] = *ctx->src_ptr++;
+            while (isdigit(*ctx->src_ptr)) ctx->token[i++] = *ctx->src_ptr++;
+            ctx->token[i] = 0;
+            ctx->token_type = 4; 
+        } else {
+            ctx->token[i] = 0;
+            ctx->token_type = 2; 
+        }
     }
   } else if (*ctx->src_ptr == '"') {
     i = 0;
@@ -803,9 +851,9 @@ static void get_tok(cr_context *ctx) {
       ctx->src_ptr++;
     ctx->token[i] = 0;
     ctx->token_type = 5; 
-  } else if (strchr("><=!&|", *ctx->src_ptr)) {
+  } else if (strchr("><=!&|^~", *ctx->src_ptr)) {
     ctx->token[0] = *ctx->src_ptr++;
-    if (*ctx->src_ptr == '=' || (*ctx->src_ptr == ctx->token[0] && (*ctx->src_ptr == '&' || *ctx->src_ptr == '|'))) {
+    if (*ctx->src_ptr == '=' || (*ctx->src_ptr == ctx->token[0] && (*ctx->src_ptr == '&' || *ctx->src_ptr == '|' || *ctx->src_ptr == '<' || *ctx->src_ptr == '>'))) {
          ctx->token[1] = *ctx->src_ptr++;
          ctx->token[2] = 0;
     } else {
@@ -853,6 +901,14 @@ static int try_fold_const(cr_context *ctx, int op, int in1, int in2) {
                 if(v1.type==CR_INT && v2.type==CR_INT) res=make_int(v1.as.i*v2.as.i);
                 else res=make_float(as_float(v1)*as_float(v2)); break;
             case OP_DIV: res = make_float((as_float(v2) == 0.0) ? 0.0 : as_float(v1)/as_float(v2)); break;
+            
+            case OP_BIT_AND: res=make_int(as_int(v1) & as_int(v2)); break;
+            case OP_BIT_OR:  res=make_int(as_int(v1) | as_int(v2)); break;
+            case OP_BIT_XOR: res=make_int(as_int(v1) ^ as_int(v2)); break;
+            case OP_BIT_NOT: res=make_int(~as_int(v1)); break;
+            case OP_BIT_LSHIFT: res=make_int(as_int(v1) << as_int(v2)); break;
+            case OP_BIT_RSHIFT: res=make_int(as_int(v1) >> as_int(v2)); break;
+
             default: return -1;
         }
         nidx = alloc_node(ctx, OP_CONST);
@@ -975,7 +1031,11 @@ static int factor(cr_context *ctx) {
     
     if (ctx->token_type == 2) { 
         idx = alloc_node(ctx, OP_CONST);
-        ctx->node_pool[idx].value = make_int(atoi(ctx->token));
+        if (ctx->token[0] == '0' && (ctx->token[1] == 'x' || ctx->token[1] == 'X')) {
+             ctx->node_pool[idx].value = make_int((int)strtol(ctx->token, NULL, 16));
+        } else {
+             ctx->node_pool[idx].value = make_int(atoi(ctx->token));
+        }
         ctx->node_pool[idx].is_constant = 1;
         get_tok(ctx);
     } else if (ctx->token_type == 4) { 
@@ -1154,6 +1214,9 @@ static int factor(cr_context *ctx) {
                 else if (!strcmp(name, "sign")) op = OP_SIGN;
                 else if (!strcmp(name, "mtof")) op = OP_MTOF;
                 else if (!strcmp(name, "lerp")) op = OP_LERP;
+                else if (!strcmp(name, "clamp")) op = OP_CLAMP;
+                else if (!strcmp(name, "map")) op = OP_MAP;
+                else if (!strcmp(name, "random")) op = OP_RANDOM;
                 else if (!strcmp(name, "section")) op = OP_SECTION;
                 
                 if (op == -1) { 
@@ -1212,6 +1275,14 @@ static int factor(cr_context *ctx) {
         get_tok(ctx); r = factor(ctx);
         {
             int node = alloc_node(ctx, OP_NOT);
+            ctx->node_pool[node].inputs[0] = r;
+            ctx->node_pool[node].input_count = 1;
+            idx = node;
+        }
+    } else if (!strcmp(ctx->token, "~")) {
+        get_tok(ctx); r = factor(ctx);
+        {
+            int node = alloc_node(ctx, OP_BIT_NOT);
             ctx->node_pool[node].inputs[0] = r;
             ctx->node_pool[node].input_count = 1;
             idx = node;
@@ -1297,14 +1368,32 @@ static int sum(cr_context *ctx) {
     return n;
 }
 
-static int relation(cr_context *ctx) {
+static int shift(cr_context *ctx) {
     int n = sum(ctx);
+    while (!strcmp(ctx->token, "<<") || !strcmp(ctx->token, ">>")) {
+        char op_str[4]; strcpy(op_str, ctx->token);
+        get_tok(ctx);
+        {
+            int r = sum(ctx);
+            int op_type = !strcmp(op_str, "<<") ? OP_BIT_LSHIFT : OP_BIT_RSHIFT;
+            int node = alloc_node(ctx, op_type);
+            ctx->node_pool[node].inputs[0] = n;
+            ctx->node_pool[node].inputs[1] = r;
+            ctx->node_pool[node].input_count = 2;
+            n = node;
+        }
+    }
+    return n;
+}
+
+static int relation(cr_context *ctx) {
+    int n = shift(ctx);
     while (!strcmp(ctx->token, ">") || !strcmp(ctx->token, "<") || !strcmp(ctx->token, ">=") || 
            !strcmp(ctx->token, "<=") || !strcmp(ctx->token, "==") || !strcmp(ctx->token, "!=")) {
         char op_str[4]; strcpy(op_str, ctx->token);
         get_tok(ctx);
         {
-            int r = sum(ctx);
+            int r = shift(ctx);
             int op_type = 0;
             if(!strcmp(op_str, ">")) op_type = OP_GT;
             if(!strcmp(op_str, "<")) op_type = OP_LT;
@@ -1324,12 +1413,60 @@ static int relation(cr_context *ctx) {
     return n;
 }
 
-static int logic_and(cr_context *ctx) {
+static int bit_and(cr_context *ctx) {
     int n = relation(ctx);
-    while (!strcmp(ctx->token, "&&")) {
+    while (!strcmp(ctx->token, "&")) {
         get_tok(ctx);
         {
             int r = relation(ctx);
+            int node = alloc_node(ctx, OP_BIT_AND);
+            ctx->node_pool[node].inputs[0] = n;
+            ctx->node_pool[node].inputs[1] = r;
+            ctx->node_pool[node].input_count = 2;
+            n = node;
+        }
+    }
+    return n;
+}
+
+static int bit_xor(cr_context *ctx) {
+    int n = bit_and(ctx);
+    while (!strcmp(ctx->token, "^")) {
+        get_tok(ctx);
+        {
+            int r = bit_and(ctx);
+            int node = alloc_node(ctx, OP_BIT_XOR);
+            ctx->node_pool[node].inputs[0] = n;
+            ctx->node_pool[node].inputs[1] = r;
+            ctx->node_pool[node].input_count = 2;
+            n = node;
+        }
+    }
+    return n;
+}
+
+static int bit_or(cr_context *ctx) {
+    int n = bit_xor(ctx);
+    while (!strcmp(ctx->token, "|")) {
+        get_tok(ctx);
+        {
+            int r = bit_xor(ctx);
+            int node = alloc_node(ctx, OP_BIT_OR);
+            ctx->node_pool[node].inputs[0] = n;
+            ctx->node_pool[node].inputs[1] = r;
+            ctx->node_pool[node].input_count = 2;
+            n = node;
+        }
+    }
+    return n;
+}
+
+static int logic_and(cr_context *ctx) {
+    int n = bit_or(ctx);
+    while (!strcmp(ctx->token, "&&")) {
+        get_tok(ctx);
+        {
+            int r = bit_or(ctx);
             int node = alloc_node(ctx, OP_AND);
             ctx->node_pool[node].inputs[0] = n;
             ctx->node_pool[node].inputs[1] = r;
