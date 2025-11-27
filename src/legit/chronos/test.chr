@@ -1,173 +1,209 @@
 # ==========================================
-# CHRONOS SONG TEMPLATE
+# CHRONOS PROGRESSIVE HOUSE DEMO (REFINED)
 # ==========================================
 
-# 1. GLOBAL SETTINGS
-# ------------------
-bpm = 125
-beat_dur = 60 / bpm
-bar_dur = beat_dur * 4
-t = time
+# 1. GLOBAL TRANSPORT
+# -------------------
+bpm = 128
 
-# 2. INSTRUMENT DEFINITIONS (Synthesis)
-# -------------------------------------
+# 2. HELPER MACROS
+# ----------------
+# Basic Sawtooth Oscillator: Maps phasor (0..1) to (-1..1)
+def saw(freq) {
+    p = phasor(freq)
+    return (p - 0.5) * 2.0
+}
 
-# Kick Drum: A sine wave sweeping down in pitch + amplitude envelope
+# 3. INSTRUMENT DEFINITIONS
+# -------------------------
+
+# Kick: Exponential pitch drop + resonant click + saturation
 def kick(trig) {
-    env = adsr(trig, 0.005, 0.25)
-    pitch_env = adsr(trig, 0.005, 0.05)
-    freq = 50 + (pitch_env * 200)
+    # Amplitude Envelope
+    e_amp = adsr(trig, 0.005, 0.4)
+    # Pitch Envelope (Short and punchy)
+    e_p = adsr(trig, 0.002, 0.12)
+    
+    # Exponential pitch sweep: 50Hz base + (Envelope^2 * Range)
+    # Squaring the envelope creates a punchier "thud"
+    freq = 55 + (e_p * e_p * 200)
+    
     osc = sine(freq)
-    # Add a bit of tanh saturation for punch
-    sound = tanh(osc * env * 2.0)
-    return sound
+    
+    # Add a tiny bit of noise click at the start
+    click = filter(noise(), 0, 2000, 2.0) * adsr(trig, 0.001, 0.01)
+    
+    # Drive the output into tanh for harmonic saturation
+    return tanh((osc + click * 0.2) * e_amp * 4.0)
 }
 
-# Snare: White noise + Tone mixed
-def snare(trig) {
-    env = adsr(trig, 0.005, 0.15)
-    tone = sine(200) * env * 0.5
-    noise_osc = noise() * env
-    # High pass filter the noise to clean up mud
-    hi_noise = filter(noise_osc, 1, 1000, 0.5) 
-    return tanh(tone + hi_noise)
+# Clap: Band-passed noise for "wood" texture
+def clap(trig) {
+    e = adsr(trig, 0.002, 0.15)
+    # Filter Type 0 = Band Pass. Center at 1200Hz gives good "smack"
+    n = filter(noise(), 0, 1200, 1.0)
+    return n * e * 1.5
 }
 
-# Hi-Hat: High frequency noise with very short decay
+# Hi-Hat: High-passed metallic noise
 def hat(trig) {
-    env = adsr(trig, 0.002, 0.05)
-    n = noise()
-    # Bandpass filter for metallic sound
-    c = filter(n, 2, 8000, 2.0)
-    return c * env * 0.4
+    e = adsr(trig, 0.002, 0.05)
+    # Type 2 = High Pass. Remove low rumble.
+    n = filter(noise(), 2, 9000, 1.0) 
+    return n * e * 0.6
 }
 
-# FM Bass: Frequency Modulation synthesis
-def fm_bass(trig, note) {
-    env = adsr(trig, 0.01, 0.4)
+# Bass: Detuned Sawtooths + Resonant Low Pass Filter
+def bass(trig, note) {
     freq = mtof(note)
+    e_filt = adsr(trig, 0.01, 0.25)
+    e_amp = adsr(trig, 0.01, 0.4)
     
-    # Modulator
-    mod_env = adsr(trig, 0.01, 0.2)
-    mod_idx = 2.0 * mod_env * freq
-    mod = sine(freq * 2.0) * mod_idx
+    # Dual Oscillator Detune (Fat Bass)
+    osc1 = saw(freq)
+    osc2 = saw(freq * 1.01) # Slightly sharp
+    raw = (osc1 + osc2) * 0.5
     
-    # Carrier
-    car = sine(freq + mod)
-    return car * env
+    # Resonant Filter Sweep
+    # Cutoff moves from 100Hz up to 3000Hz based on envelope
+    cut = 100 + (e_filt * 3000)
+    # Type 1 = Low Pass, Q = 1.5 (Resonant)
+    sig = filter(raw, 1, cut, 1.5)
+    
+    return sig * e_amp
 }
 
-# Arpeggio Pluck: Sawtooth-ish (distorted sine) with delay
-def pluck(trig, note) {
-    env = adsr(trig, 0.01, 0.3)
+# Super Saw Lead: 3 Detuned Oscillators for width
+def lead(trig, note) {
     freq = mtof(note)
+    e = adsr(trig, 0.02, 0.6)
     
-    # Create sawtooth-like harmonics using fold/tanh
-    osc = sine(freq)
-    shaper = tanh(osc * 5.0) 
+    s1 = saw(freq)
+    s2 = saw(freq * 1.008) # +8 cents
+    s3 = saw(freq * 0.992) # -8 cents
     
-    # Filter sweep
-    cut = 500 + (env * 4000)
-    f = lpf(shaper, cut)
+    # Average them
+    mix = (s1 + s2 + s3) * 0.33
     
-    return f * env
+    # High pass to clean up mix space for bass
+    mix = filter(mix, 2, 300, 0.7)
+    
+    # Stereo Delay effect (Ping-pong simulated via mono delay for now)
+    wet = delay(mix, 0.35, 0.5) 
+    
+    return (mix + wet * 0.4) * e
 }
 
-# 3. RHYTHM & SEQUENCING
-# ----------------------
-# Master Clock Logic
-# 16th note triggers
-rate_16 = 1.0 / (beat_dur / 4)
-clock_16 = phasor(rate_16)
-trig_16 = clock_16 - floor(clock_16) # Sawtooth 0-1
-impulse_16 = trig_16 < 0.1         # Trigger pulse
+# Epic Pad: Swelling Sawtooths with heavy Reverb
+def pad(gate, note) {
+    freq = mtof(note)
+    # Slow attack (1s) and release (2s)
+    e = adsr(gate, 1.0, 2.0) 
+    
+    s1 = saw(freq)
+    s2 = saw(freq * 1.004)
+    
+    # Smooth LPF
+    raw = filter((s1 + s2) * 0.5, 1, 800, 0.5)
+    
+    return reverb(raw * e, 4.0, 0.6)
+}
 
-# Drum Patterns (0 = rest, 1 = hit)
-# We use 'seq' to loop through values based on the 16th note duration
-step_t = beat_dur / 4
+# 3. SEQUENCING
+# -------------
 
-# Kick Pattern: Four-on-the-floor
-k_pat = seq(step_t, 1, 0, 0, 0,  1, 0, 0, 0,  1, 0, 0, 0,  1, 0, 0, 1)
-k_trig = impulse_16 * k_pat
+# Master Clock: 16th notes
+clk = phasor(16 * bpm / 240)
+trig_16 = (clk - floor(clk)) < 0.1
 
-# Snare Pattern: Standard backbeat
-s_pat = seq(step_t, 0, 0, 0, 0,  1, 0, 0, 0,  0, 0, 0, 0,  1, 0, 0, 0)
-s_trig = impulse_16 * s_pat
+# Patterns
+p_kick = seq(0.1, rhythm("x...x...x...x..."))
+p_clap = seq(0.1, rhythm("....x.......x..."))
+p_hat  = seq(0.1, rhythm("..x...x...x...x."))
+p_bass = seq(0.1, rhythm("x.x.x.x.x.x.x.x."))
 
-# Hat Pattern: Off-beats
-h_pat = seq(step_t, 0, 0, 1, 0,  0, 0, 1, 0,  0, 0, 1, 0,  0, 0, 1, 1)
-h_trig = impulse_16 * h_pat
+# Bass Note Progression (changes every 4 bars? handled in logic or long seq)
+# Simple 1-bar loop for now
+n_bass = seq(0.4, 36, 36, 39, 41) 
 
-# Bass Line (MIDI note numbers)
-bass_note = seq(step_t * 4, 36, 36, 39, 41) # C2, C2, Eb2, F2
-bass_trig = impulse_16 * seq(step_t, 1, 0, 1, 0)
+# Lead Melody
+p_lead = seq(0.1, rhythm("x.xx.x.x..x.x..."))
+n_lead = seq(0.1, 60, 63, 67, 72, 60, 63, 67, 70) 
 
-# Arp Melody
-arp_note = seq(step_t, 60, 63, 67, 72, 60, 63, 67, 70, 58, 62, 65, 70, 58, 62, 65, 68)
-arp_trig = impulse_16
+# Pad Chords
+chord_root = seq(1.6, 48, 43, 46, 51) # Lower octave for pad
 
-# 4. SONG STRUCTURE LOGIC
-# -----------------------
-# Calculate current bar
-current_bar = t / bar_dur
+# 4. ARRANGEMENT
+# --------------
 
-# Define Sections (Time ranges in bars)
-# Intro:   Bars 0 - 4
-# Verse:   Bars 4 - 12
-# Build:   Bars 12 - 16
-# Chorus:  Bars 16 - 24
-# Outro:   Bars 24+
+drum_bus = 0
+bass_bus = 0
+lead_bus = 0
+pad_bus = 0
 
-is_intro  = (current_bar < 4)
-is_verse  = (current_bar >= 4) && (current_bar < 12)
-is_build  = (current_bar >= 12) && (current_bar < 16)
-is_chorus = (current_bar >= 16) && (current_bar < 24)
-is_outro  = (current_bar >= 24)
+# Automation LFOs
+slow_lfo = sine(0.1) * 0.5 + 0.5 # 0 to 1 slow wave
 
-# 5. MIXER & ARRANGEMENT
-# ----------------------
-# Generate audio for all instruments
-kick_audio = kick(k_trig)
-snare_audio = snare(s_trig)
-hat_audio = hat(h_trig)
-bass_audio = fm_bass(bass_trig, bass_note)
-arp_dry = pluck(arp_trig, arp_note)
-arp_audio = delay(arp_dry, beat_dur * 0.75, 0.4) # Dotted 8th delay
+if (bars < 8) {
+    # INTRO
+    # Filter opens up slowly
+    filt_auto = 200 + (bars * 400)
+    # Filtered Kick
+    k = filter(kick(trig_16 * p_kick), 1, filt_auto, 1.0)
+    drum_bus = k
+    
+    pad_bus = pad(1, chord_root) * 0.5
+} 
+else {
+    if (bars < 16) {
+        # BUILD UP
+        drum_bus = kick(trig_16 * p_kick) + hat(trig_16 * p_hat)
+        
+        # Snare build at end
+        fill = 0
+        if (bars >= 15) {
+            roll = phasor(32 * bpm / 240)
+            fill = clap((roll - floor(roll)) < 0.5) * 0.8
+        } else {
+            fill = clap(trig_16 * p_clap)
+        }
+        drum_bus = drum_bus + fill
+        
+        pad_bus = pad(1, chord_root) * 0.6
+        
+        # Tease the lead
+        lead_vol = (bars - 8) / 8.0
+        # High pass the lead during build
+        lead_raw = lead(trig_16 * p_lead, n_lead)
+        lead_bus = filter(lead_raw, 2, 500 + (1-lead_vol)*1000, 1.0) * lead_vol
+    } 
+    else {
+        if (bars < 32) {
+            # DROP
+            drum_bus = kick(trig_16 * p_kick) + clap(trig_16 * p_clap) + hat(trig_16 * p_hat)
+            bass_bus = bass(trig_16 * p_bass, n_bass)
+            lead_bus = lead(trig_16 * p_lead, n_lead)
+            pad_bus = 0 # Clean mix
+        }
+        else {
+            # OUTRO
+            drum_bus = kick(trig_16 * p_kick)
+            bass_bus = bass(trig_16 * p_bass, n_bass)
+            lead_bus = lead(trig_16 * p_lead, n_lead) * 0.2
+        }
+    }
+}
 
-# Arrangement Logic (Muting parts based on section)
-# Intro: Arp + Filter sweep
-# Verse: Drums + Bass + Dry Arp
-# Build: Drums + Rising Snare (simulated) + Arp
-# Chorus: Full mix
-# Outro: Arp only
+# 5. MASTER MIX
+# -------------
 
-vol_kick = (is_verse || is_build || is_chorus)
-vol_snare = (is_verse || is_build || is_chorus)
-vol_hat = (is_verse || is_chorus)
-vol_bass = (is_verse || is_chorus)
-vol_arp = (is_intro || is_verse || is_build || is_chorus || is_outro)
+mix = drum_bus + bass_bus * 0.9 + lead_bus * 0.7 + pad_bus
 
-# Special FX for sections
-# Intro fade logic: use 'select' instead of 'if'
-intro_ramp = t / (bar_dur * 4)
-intro_fade = select(is_intro, intro_ramp, 1)
+# Master Compressor to glue
+# Threshold -12dB, Ratio 4:1
+comp = compress(mix, -12, 4, 0.05)
 
-# Final Summing
-mix = 0
-mix = mix + (kick_audio * 0.8 * vol_kick)
-mix = mix + (snare_audio * 0.6 * vol_snare)
-mix = mix + (hat_audio * 0.4 * vol_hat)
-mix = mix + (bass_audio * 0.7 * vol_bass)
-mix = mix + (arp_audio * 0.5 * vol_arp * intro_fade)
+# Limiter to catch peaks
+final = limit(comp)
 
-# Master Bus Compression/Limiting
-master = compress(mix, -10, 4, 0.1)
-final = limit(master)
-
-# Output
 out = final
-output.0 = final
-output.1 = final
-
-# Debug info: sum boolean flags to get section ID
-section = (is_intro * 1) + (is_verse * 2) + (is_build * 3) + (is_chorus * 4) + (is_outro * 5)
