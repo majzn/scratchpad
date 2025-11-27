@@ -1,0 +1,119 @@
+
+
+#define _CRT_SECURE_NO_WARNINGS
+#define CHRONOS_IMPLEMENTATION
+#include "chronos.h"
+#define SS_ENGINE_IMPLEMENTATION
+#include "ss.h"
+#include <stdio.h>
+#include <string.h>
+#include <math.h> // Needed for tanh
+
+static cr_context* ctx = NULL;
+
+void app_audio_play(short *buf, int n_frames, int s_rate, int ch, void *udata) {
+    int i, c;
+    cr_lock(ctx);
+    for (i = 0; i < n_frames; i++) {
+        ctx->global_time++;
+        for (c = 0; c < ch; c++) {
+            double val = cr_process(ctx, c);
+            
+            // FIX: Use Soft Clipping (tanh) instead of Hard Clipping
+            // This simulates analog headroom. 
+            // If val > 1.0, it smoothly approaches 1.0 without harsh edges.
+            val = tanh(val); 
+            
+            // Optional: Add a slight pre-gain (1.5x) to drive the "tube" effect
+            // val = tanh(val * 1.5); 
+
+            if (val > 1.0) val = 1.0;
+            else if (val < -1.0) val = -1.0;
+            
+            buf[i * ch + c] = (short)(val * 32000.0);
+        }
+    }
+    cr_unlock(ctx);
+}
+
+int main(int argc, char **argv) {
+    char line[1024];
+    ss_audio_t* audio;
+    int log_lvl = CR_LOG_WARN;
+    char* file_to_load = NULL;
+    int i;
+    
+    for(i = 1; i < argc; i++) {
+        if(strcmp(argv[i], "-v") == 0) log_lvl = CR_LOG_INFO;
+        else if(strcmp(argv[i], "-d") == 0) log_lvl = CR_LOG_DEBUG;
+        else if(strcmp(argv[i], "-q") == 0) log_lvl = CR_LOG_NONE;
+        else file_to_load = argv[i];
+    }
+    
+    printf("Chronos v8.3 (Soft Clip Edition)\n");
+    ctx = cr_create_context();
+    cr_set_log_level(ctx, log_lvl);
+
+    if (file_to_load) {
+        FILE* f = fopen(file_to_load, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long sz = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            char* buf = (char*)malloc(sz + 1);
+            if (buf) {
+                fread(buf, 1, sz, f);
+                buf[sz] = 0;
+                printf("Loading '%s'...\n", file_to_load);
+                if(cr_run(ctx, buf)) printf("Script loaded successfully.\n");
+                free(buf);
+            }
+            fclose(f);
+        } else {
+            printf("Could not open file '%s'\n", file_to_load);
+        }
+    }
+
+    audio = ss_open_audio(app_audio_play, NULL, 44100, 2, 1024, NULL);
+    if (!audio) { printf("Audio failed.\n"); return 1; }
+    
+    printf("REPL Ready. Type 'quit' to exit, 'inspect(var)' to debug.\n");
+    while (1) {
+        printf("> ");
+        if (!fgets(line, 1024, stdin)) break;
+        line[strcspn(line, "\n")] = 0;
+        if (strcmp(line, "quit") == 0) break;
+        if (strlen(line) == 0) continue;
+        if (strncmp(line, ":load ", 6) == 0) {
+            char* fname = line + 6;
+            FILE* f = fopen(fname, "rb");
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                long sz = ftell(f);
+                fseek(f, 0, SEEK_SET);
+                char* buf = (char*)malloc(sz + 1);
+                if (buf) {
+                    fread(buf, 1, sz, f);
+                    buf[sz] = 0;
+                    cr_lock(ctx);
+                    int ok = cr_run(ctx, buf);
+                    cr_unlock(ctx);
+                    free(buf);
+                    if(ok) printf("Loaded.\n");
+                }
+                fclose(f);
+            } else {
+                printf("File not found.\n");
+            }
+            continue;
+        }
+
+        cr_lock(ctx);
+        int ok = cr_run(ctx, line);
+        cr_unlock(ctx);
+        if (ok) printf("OK\n");
+    }
+    ss_close_audio(audio);
+    cr_destroy_context(ctx);
+    return 0;
+}
