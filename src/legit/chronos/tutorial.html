@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chronos Music Scripting Engine: Comprehensive Tutorial</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #2563EB; /* Blue-600 */
+            --bg-dark: #1F2937; /* Gray-800 */
+            --bg-light: #374151; /* Gray-700 */
+            --text-light: #F9FAFB;
+            --code-bg: #111827; /* Gray-900 */
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-light);
+            line-height: 1.5; /* Reduced line height for density */
+        }
+        h1, h2, h3 {
+            font-weight: 700;
+        }
+        .code-block {
+            background-color: var(--code-bg);
+            border-radius: 0.3rem; /* Slightly smaller radius */
+            padding: 0.8rem; /* Reduced padding */
+            margin-top: 0.5rem;
+            margin-bottom: 0.5rem;
+            font-family: 'JetBrains Mono', monospace;
+            overflow-x: auto;
+            border-left: 3px solid var(--primary-color); /* Thinner border */
+            font-size: 0.85rem; /* Slightly smaller font for code */
+        }
+        .code-snippet {
+            color: #D1D5DB;
+        }
+        .keyword { color: #818CF8; }
+        .func { color: #34D399; }
+        .variable { color: #FCD34D; }
+        .comment { color: #6B7280; }
+        .string { color: #F87171; }
+        .number { color: #60A5FA; }
+        .syntax { color: #F9FAFB; }
+        .operator { color: #FACC15; }
+
+        .accordion-header {
+            cursor: pointer;
+            transition: background-color 0.2s;
+            padding: 0.6rem; /* Reduced padding */
+        }
+        .accordion-header:hover {
+            background-color: var(--bg-light);
+        }
+        .highlight {
+            background-color: rgba(37, 99, 235, 0.2);
+            padding: 0.1rem 0.3rem;
+            border-radius: 0.2rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+        }
+
+        .icon-arrow {
+            transition: transform 0.3s;
+        }
+        details[open] .icon-arrow {
+            transform: rotate(90deg);
+        }
+
+        /* Responsive Flowchart Styling (Minimized) */
+        .flowchart-box {
+            background-color: #1F2937;
+            border: 1px solid #2563EB;
+            padding: 8px; /* Reduced padding */
+            margin: 3px;
+            border-radius: 4px; /* Reduced radius */
+            text-align: center;
+            flex-shrink: 0;
+            font-size: 0.75rem; /* Smaller font */
+        }
+        .flowchart-container {
+            overflow-x: auto;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            padding: 5px 0; /* Reduced padding */
+        }
+        .flowchart-arrow {
+            color: #2563EB;
+            font-size: 1.2rem; /* Smaller arrow */
+            margin: 0 3px;
+            flex-shrink: 0;
+        }
+    </style>
+</head>
+<body class="p-3 sm:p-6">
+
+    <header class="text-center mb-8">
+        <h1 class="text-3xl sm:text-5xl font-extrabold text-white">Chronos Scripting Engine</h1>
+        <p class="text-lg text-gray-400 mt-1">Exhaustive Guide to the Modular OP System (v9.5)</p>
+    </header>
+
+    <div class="max-w-4xl mx-auto">
+
+        <section class="mb-8 p-4 bg-gray-700 rounded-lg shadow-md">
+            <h2 class="text-2xl text-blue-400 border-b border-blue-500 pb-2 mb-4">1. Core Architecture</h2>
+
+            <details open class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        DSP Graph, Compilation, and Topology
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 space-y-2 text-sm">
+                    <p>Chronos compiles all script logic into a **Directed Acyclic Graph (DAG)** of **cr_node** objects. This is a purely functional dataflow model. Every node represents one operation (OP), constant, or variable access.</p>
+                    <p>Compilation includes a **Topological Sort** (<span class="highlight">build_exec_list</span>) to determine the exact, sample-accurate execution order (<span class="highlight">exec_order</span>), guaranteeing that a node runs only after all its inputs have been computed.</p>
+                    
+                    
+                    <h4 class="font-semibold text-blue-300 mt-3 mb-1">Execution Flow (Per-Sample)</h4>
+                    <div class="flowchart-container">
+                        <div class="flowchart-box">Audio Callback</div>
+                        <div class="flowchart-arrow">→</div>
+                        <div class="flowchart-box"><span class="func">cr_tick()</span> (Time++)</div>
+                        <div class="flowchart-arrow">→</div>
+                        <div class="flowchart-box">Execute <span class="highlight">exec_order</span> nodes</div>
+                        <div class="flowchart-arrow">→</div>
+                        <div class="flowchart-box">Read <span class="variable">out</span> node value (L/R)</div>
+                        <div class="flowchart-arrow">→</div>
+                        <div class="flowchart-box">Output Sample</div>
+                    </div>
+                </div>
+            </details>
+
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        Hot-Swapping and State Continuity
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 space-y-2 text-sm">
+                    <p>Live-coding is achieved via a two-context system (<span class="highlight">active</span> and <span class="highlight">back</span>).</p>
+                    <ol class="list-decimal list-inside ml-4 space-y-1">
+                        <li>New script compiles into the <span class="highlight">back</span> context.</li>
+                        <li>**State Migration:** <span class="highlight">migrate_dsp_state</span> copies the DSP state (buffers, phases, envelope stages) from the old <span class="highlight">active</span> nodes to the corresponding new <span class="highlight">back</span> nodes, matching by variable name.</li>
+                        <li>The contexts are atomically swapped using a thread lock.</li>
+                    </ol>
+                    
+                    <p class="mt-2 text-yellow-300">**Crucial:** Stateful operations (like <span class="func">adsr</span>, <span class="func">phasor</span>, <span class="func">delay</span>) must be fed by variables whose names remain unchanged to preserve continuity upon hot-swap.</p>
+                </div>
+            </details>
+        </section>
+
+        <section class="mb-8 p-4 bg-gray-700 rounded-lg shadow-md">
+            <h2 class="text-2xl text-blue-400 border-b border-blue-500 pb-2 mb-4">2. Chronos Scripting Language (CRL)</h2>
+
+            <details open class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        Basic Syntax and Operators
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 space-y-2 text-sm">
+                    <p>CRL supports standard algebraic operators that are directly mapped to DSP nodes:</p>
+                    <ul class="list-disc list-inside ml-4">
+                        <li>**Arithmetic:** <span class="highlight">+</span> (<span class="func">add</span>), <span class="highlight">-</span> (<span class="func">sub</span>), <span class="highlight">*</span> (<span class="func">mul</span>), <span class="highlight">/</span> (<span class="func">div</span>), <span class="highlight">%</span> (<span class="func">mod</span>)</li>
+                        <li>**Comparison:** <span class="highlight">==</span> (<span class="func">eq</span>), <span class="highlight">!=</span> (<span class="func">ne</span>), <span class="highlight">&gt;</span> (<span class="func">gt</span>), <span class="highlight">&lt;</span> (<span class="func">lt</span>), <span class="highlight">&gt;=</span> (<span class="func">ge</span>), <span class="highlight">&lt;=</span> (<span class="func">le</span>)</li>
+                        <li>**Logical:** <span class="highlight">&amp;&amp;</span> (<span class="func">and</span>), <span class="highlight">||</span> (<span class="func">or</span>)</li>
+                    </ul>
+                    <div class="code-block">
+                        <pre><span class="variable">A</span> <span class="syntax">=</span> <span class="variable">B</span> <span class="operator">*</span> (<span class="variable">C</span> <span class="operator">+</span> <span class="number">1.0</span>) <span class="comment"># Algebraic operators for standard math</span>
+<span class="variable">condition</span> <span class="syntax">=</span> <span class="variable">time</span> <span class="operator">&gt;</span> <span class="number">10.0</span> <span class="operator">&amp;&amp;</span> <span class="variable">bpm</span> <span class="operator">==</span> <span class="number">120.0</span> <span class="comment"># Operators for comparison/logic</span></pre>
+                    </div>
+                    
+                    <p class="text-yellow-300 font-semibold mt-4">Note on Conditional Flow Logic:</p>
+                    <p class="text-xs">While operators like $\text{&amp;&amp;}$ and $\text{||}$ work within expressions, for clarity and guaranteed compilation within complex <span class="keyword">if</span> statements or nested logic, using the explicit function calls (e.g., <span class="func">and</span>, <span class="func">gt</span>) is often recommended to enforce the exact DSP graph structure and ensure proper operand grouping.</p>
+                </div>
+            </details>
+
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        Macros (<span class="keyword">def</span> / <span class="keyword">return</span>) and Scoping
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 space-y-2 text-sm">
+                    <p>Macros are syntactic sugar for inlined code blocks. Arguments are pass-by-reference to the corresponding input nodes. Local variables defined inside the macro body are scoped with a unique prefix to prevent collisions.</p>
+                    <div class="code-block">
+                        <pre><span class="keyword">def</span> <span class="func">SawtoothFilter</span>(<span class="variable">pitch</span>, <span class="variable">cutoff</span>) {
+    <span class="variable">f</span> <span class="syntax">=</span> <span class="func">mtof</span>(<span class="variable">pitch</span>)
+    <span class="variable">saw</span> <span class="syntax">=</span> <span class="func">sub</span>(<span class="func">mul</span>(<span class="func">phasor</span>(<span class="variable">f</span>), <span class="number">2.0</span>), <span class="number">1.0</span>)
+    <span class="keyword">return</span> <span class="func">filter</span>(<span class="variable">saw</span>, <span class="number">1.0</span>, <span class="variable">cutoff</span>, <span class="number">10.0</span>)
+}
+<span class="variable">out</span> <span class="syntax">=</span> <span class="func">SawtoothFilter</span>(<span class="variable">NOTE_PITCH</span>, <span class="number">800.0</span>)</pre>
+                    </div>
+                </div>
+            </details>
+
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        Conditional Logic (<span class="keyword">if</span> / <span class="keyword">else</span>)
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 space-y-2 text-sm">
+                    <p>Provides sample-by-sample dynamic signal routing. Variables modified inside the blocks are reconciled at the end using the implicit <span class="highlight">OP_SELECT</span> node (Phi function).</p>
+                    <div class="code-block">
+                        <pre><span class="variable">pan</span> <span class="syntax">=</span> <span class="number">0.0</span> <span class="comment"># Center</span>
+<span class="variable">cond</span> <span class="syntax">=</span> <span class="variable">time</span> <span class="operator">&gt;</span> <span class="number">5.0</span> <span class="comment"># Simple comparison using the operator</span>
+<span class="keyword">if</span> (<span class="variable">cond</span>) {
+    <span class="variable">pan</span> <span class="syntax">=</span> <span class="number">0.8</span> <span class="comment"># Pan Right</span>
+} <span class="keyword">else</span> {
+    <span class="variable">pan</span> <span class="syntax">=</span> <span class="number">-0.8</span> <span class="comment"># Pan Left</span>
+}
+<span class="comment"># 'pan' is now a merged node selecting between 0.8 and -0.8</span></pre>
+                    </div>
+                </div>
+            </details>
+        </section>
+
+        <section class="mb-8 p-4 bg-gray-700 rounded-lg shadow-md">
+            <h2 class="text-2xl text-blue-400 border-b border-blue-500 pb-2 mb-4">3. DSP Operations (Reference)</h2>
+
+            <div class="text-sm text-gray-300 space-y-4">
+                <h4 class="font-bold text-blue-300">Sources, Timing, and Control</h4>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
+                    <p><span class="func">phasor(<span class="variable">f</span>)</span>: Saw phase ramp (0&rarr;1). **Stateful**.</p>
+                    <p><span class="func">sine(<span class="variable">p</span>)</span>: Sine wave output (-1&rarr;1).</p>
+                    <p><span class="func">noise()</span>: White noise output (-1&rarr;1).</p>
+                    <p><span class="func">rhythm("<span class="string">pat</span>")</span>: Pattern gate (1/0). **Static Buffer**.</p>
+                    <p><span class="func">seq(<span class="variable">T</span>, <span class="variable">v1</span>, ...)</span>: Step sequencer/pattern reader.</p>
+                    <p><span class="variable">time</span>: Global time in seconds.</p>
+                    <p><span class="variable">bars</span>: Global position in musical bars (relies on <span class="variable">bpm</span>).</p>
+                    <p><span class="func">mtof(<span class="variable">m</span>)</span>: MIDI Note &rarr; Frequency (Hz).</p>
+                </div>
+
+                <h4 class="font-bold text-blue-300 pt-3">Filters, Dynamics, and Shapers</h4>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
+                    <p><span class="func">adsr(<span class="variable">g</span>, <span class="variable">A</span>, <span class="variable">D</span>, <span class="variable">S</span>, <span class="variable">R</span>)</span>: ADSR Envelope. **Stateful**.</p>
+                    <p><span class="func">filter(<span class="variable">s</span>, <span class="variable">t</span>, <span class="variable">c</span>, <span class="variable">Q</span>)</span>: SVF. **Stateful**. $\text{t}=0$ BP, $1$ LP, $2$ HP.</p>
+                    <p><span class="func">peakeq(<span class="variable">s</span>, <span class="variable">f</span>, <span class="variable">g</span>, <span class="variable">Q</span>)</span>: Peaking EQ (BiQuad).</p>
+                    <p><span class="func">hpf(<span class="variable">s</span>, <span class="variable">c</span>)</span>: Simple 1st-order High Pass Filter.</p>
+                    <p><span class="func">delay(<span class="variable">s</span>, <span class="variable">t</span>, <span class="variable">fb</span>)</span>: Delay Line (Cubic interp). **Stateful**.</p>
+                    <p><span class="func">reverb(<span class="variable">s</span>, <span class="variable">d</span>, <span class="variable">dmp</span>, <span class="variable">m</span>)</span>: FDN Reverb. **Stateful/Buffer**.</p>
+                    <p><span class="func">compress(<span class="variable">s</span>, <span class="variable">th</span>, <span class="variable">r</span>)</span>: Dynamics Compressor.</p>
+                    <p><span class="func">limit(<span class="variable">s</span>)</span>: Fast Peak Limiter (0.95 thresh).</p>
+                    <p><span class="func">tanh(<span class="variable">s</span>)</span>: Soft clip ($\tanh(x)$).</p>
+                    <p><span class="func">fold(<span class="variable">s</span>, <span class="variable">th</span>)</span>: Wavefolding distortion.</p>
+                    <p><span class="func">clip(<span class="variable">s</span>)</span>: Hard clip ($\pm 1.0$).</p>
+                </div>
+
+                <h4 class="font-bold text-blue-300 pt-3">Calculus, State Logic, and Mapping</h4>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
+                    <p><span class="func">slew(<span class="variable">s</span>, <span class="variable">r</span>)</span>: Slew Limiter (Portamento). **Stateful**.</p>
+                    <p><span class="func">diff(<span class="variable">s</span>)</span>: Calculates $x[n] - x[n-1]$ (Edge Detection).</p>
+                    <p><span class="func">integrate(<span class="variable">s</span>, <span class="variable">r</span>)</span>: Accumulator/Integrator. **Stateful**.</p>
+                    <p><span class="func">sah(<span class="variable">s</span>, <span class="variable">t</span>)</span>: Sample and Hold (on rising edge). **Stateful**.</p>
+                    <p><span class="func">map(<span class="variable">v</span>, <span class="variable">min1</span>, <span class="variable">max1</span>, <span class="variable">min2</span>, <span class="variable">max2</span>)</span>: Linear scaling.</p>
+                    <p><span class="func">lerp(<span class="variable">a</span>, <span class="variable">b</span>, <span class="variable">t</span>)</span>: Linear Interpolation.</p>
+                    <p><span class="func">clamp(<span class="variable">v</span>, <span class="variable">min</span>, <span class="variable">max</span>)</span>: Limits value range.</p>
+                </div>
+
+                <h4 class="font-bold text-blue-300 pt-3">Math and Bitwise Operations</h4>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
+                    <p><span class="func">floor(<span class="variable">x</span>)</span>, <span class="func">ceil(<span class="variable">x</span>)</span>, <span class="func">abs(<span class="variable">x</span>)</span>, <span class="func">sign(<span class="variable">x</span>)</span>, <span class="func">sqrt(<span class="variable">x</span>)</span>, <span class="func">exp(<span class="variable">x</span>)</span>, <span class="func">log(<span class="variable">x</span>)</span>, <span class="func">atan2(<span class="variable">y</span>, <span class="variable">x</span>)</span>.</p>
+                    <p><span class="func">bitand(<span class="variable">a</span>, <span class="variable">b</span>)</span>, <span class="func">bitor(<span class="variable">a</span>, <span class="variable">b</span>)</span>, <span class="func">bitxor(<span class="variable">a</span>, <span class="variable">b</span>)</span>, <span class="func">bitnot(<span class="variable">a</span>)</span>, <span class="func">bitshl(<span class="variable">a</span>, <span class="variable">b</span>)</span>, <span class="func">bitshr(<span class="variable">a</span>, <span class="variable">b</span>)</span>: Integer context ops.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="mb-8 p-4 bg-gray-700 rounded-lg shadow-md">
+            <h2 class="text-2xl text-blue-400 border-b border-blue-500 pb-2 mb-4">4. Interactive Control (REPL)</h2>
+
+            <div class="text-sm text-gray-300 space-y-3">
+                <h4 class="font-bold text-blue-300">Global Control Variables (OP_CONST)</h4>
+                <div class="grid grid-cols-2 gap-x-4">
+                    <p><span class="variable">NOTE_PITCH</span>: MIDI Note (Keyboard/Map).</p>
+                    <p><span class="variable">NOTE_GATE</span>: Gate Signal (1.0/0.0).</p>
+                    <p><span class="variable">bpm</span>: Tempo reference for <span class="variable">bars</span>.</p>
+                    <p><span class="variable">MONO_MODE</span>: Set by `mono`/`poly` commands.</p>
+                    <p><span class="variable">RETRIGGER_MODE</span>: Set by `retrigger`/`legato` commands.</p>
+                </div>
+
+                <h4 class="font-bold text-blue-300 pt-3">Console Commands and Flow</h4>
+                <div class="code-block">
+                    <pre class="code-snippet"><span class="comment"># Mode Switching</span>
+<span class="keyword">mode</span>       <span class="comment"># Note-Entry mode (Play notes).</span>
+<span class="keyword">map</span>        <span class="comment"># Key Mapping mode (Define QWERTY layout).</span>
+
+<span class="comment"># Script/Engine Management</span>
+<span class="keyword">load</span> <span class="variable">file.scr</span> <span class="comment"># Full script reset &amp; load.</span>
+<span class="keyword">quit</span>       <span class="comment"># Exit application.</span>
+[script]   <span class="comment"># Live hot-swap (Appends to code history).</span>
+
+<span class="comment"># Control Flags</span>
+<span class="keyword">mono</span>       <span class="comment"># MONO_MODE = 1.0.</span>
+<span class="keyword">poly</span>       <span class="comment"># MONO_MODE = 0.0.</span>
+<span class="keyword">retrigger</span>  <span class="comment"># RETRIGGER_MODE = 1.0 (default ADSR).</span>
+<span class="keyword">legato</span>     <span class="comment"># RETRIGGER_MODE = 0.0 (ADSR sustains through pitch change).</span></pre>
+                </div>
+            </div>
+        </section>
+
+        <section class="p-4 bg-gray-700 rounded-lg shadow-md">
+            <h2 class="text-2xl text-blue-400 border-b border-blue-500 pb-2 mb-4">5. Tutorials and Snippets Library</h2>
+
+            <h3 class="text-xl text-blue-300 mt-4 mb-3">Foundational Elements: Phase, Rhythm, and Sequence</h3>
+            
+            <details open class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        T0: The Phasor and Phase Accumulation
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 text-sm">
+                    <p class="mb-2">The <span class="func">phasor</span> is the time source for all periodic signals. It is a **stateful** integrator that accumulates phase from 0.0 to 1.0 based on the input frequency ($\text{f}$).</p>
+                    
+                    <h4 class="font-semibold text-blue-300 mt-3 mb-1">Phase Flow (Oscillation)</h4>
+                    <div class="flowchart-container">
+                        <div class="flowchart-box">Input Freq (Hz)</div>
+                        <div class="flowchart-arrow">→</div>
+                        <div class="flowchart-box"><span class="func">phasor(f)</span></div>
+                        <div class="flowchart-arrow">→</div>
+                        <div class="flowchart-box">Phase (0.0 &rarr; 1.0)</div>
+                        <div class="flowchart-arrow">→</div>
+                        <div class="flowchart-box"><span class="func">sine(p)</span> / <span class="func">abs(p)</span></div>
+                    </div>
+                    
+                    <div class="code-block">
+                        <pre>
+<span class="variable">p</span> <span class="syntax">=</span> <span class="func">phasor</span>(<span class="number">440.0</span>) <span class="comment"># Produces phase for 440 Hz (A4)</span>
+<span class="variable">A4_sine</span> <span class="syntax">=</span> <span class="func">sine</span>(<span class="variable">p</span>) 
+<span class="variable">out</span> <span class="syntax">=</span> <span class="variable">A4_sine</span> <span class="operator">*</span> <span class="number">0.5</span>
+</pre>
+                    </div>
+                </div>
+            </details>
+            
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        T9: Rhythmic Pattern Arrays and Gates (<span class="func">rhythm</span>)
+                    </span
+                ></summary>
+                <div class="p-3 text-gray-300 text-sm">
+                    <p class="mb-2">The <span class="func">rhythm</span> function takes a string literal, which is compiled into a static buffer (an array of 1.0 for 'x' and 0.0 for '-'). This array is read sequentially by $\text{time}$ and $\text{bpm}$.</p>
+                    <p class="mb-2 text-yellow-300 font-semibold">The sequence length is derived from the string length, and the step duration is $\frac{1}{BPM \times 4 / N}$, where $N$ is the number of steps in a bar (usually 16 or 32 for common patterns).</p>
+                    <div class="code-block">
+                        <pre>
+<span class="variable">bpm</span> <span class="syntax">=</span> <span class="number">120</span>
+<span class="comment"># 8-step pattern (2 beats at 1/8 resolution)</span>
+<span class="variable">pattern_8th</span> <span class="syntax">=</span> <span class="func">rhythm</span>(<span class="string">"x-x-x-x-"</span>)
+<span class="comment"># 16-step pattern (4 beats at 1/16 resolution)</span>
+<span class="variable">pattern_16th</span> <span class="syntax">=</span> <span class="func">rhythm</span>(<span class="string">"x-xx-x-x-xx-x-x-"</span>) 
+
+<span class="variable">noise_hit</span> <span class="syntax">=</span> <span class="func">noise</span>() <span class="operator">*</span> <span class="func">adsr</span>(<span class="variable">pattern_16th</span>, <span class="number">0.001</span>, <span class="number">0.05</span>, <span class="number">0.0</span>, <span class="number">0.0</span>)
+<span class="variable">out</span> <span class="syntax">=</span> <span class="variable">noise_hit</span>
+</pre>
+                    </div>
+                </div>
+            </details>
+            
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        T10: Step Sequencing and Pitch Arrays (<span class="func">seq</span>)
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 text-sm">
+                    <p class="mb-2">The <span class="func">seq</span> function reads step values over time. Its first argument ($\text{T}$) is the duration of each step in seconds. Subsequent arguments are the values (nodes) to be sequenced.</p>
+                    <div class="code-block">
+                        <pre>
+<span class="comment"># T = 0.25 seconds per step (Quarter Note at 120 BPM)</span>
+<span class="variable">step_time</span> <span class="syntax">=</span> <span class="number">0.25</span> 
+<span class="variable">sequence_notes</span> <span class="syntax">=</span> <span class="func">seq</span>(<span class="variable">step_time</span>, <span class="number">60.0</span>, <span class="number">62.0</span>, <span class="number">64.0</span>, <span class="number">67.0</span>) <span class="comment"># C4, D4, E4, G4</span>
+
+<span class="comment"># Gate on every step (uses the same step time to align)</span>
+<span class="variable">gate</span> <span class="syntax">=</span> <span class="func">adsr</span>(<span class="func">rhythm</span>(<span class="string">"x---x---x---x---"</span>), <span class="number">0.01</span>, <span class="number">0.1</span>, <span class="number">0.5</span>, <span class="number">0.1</span>) 
+
+<span class="variable">freq</span> <span class="syntax">=</span> <span class="func">mtof</span>(<span class="variable">sequence_notes</span>)
+<span class="variable">out</span> <span class="syntax">=</span> <span class="func">sine</span>(<span class="func">phasor</span>(<span class="variable">freq</span>)) <span class="operator">*</span> <span class="variable">gate</span>
+</pre>
+                    </div>
+                </div>
+            </details>
+            
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        T11: Polyphony and Mode Switching
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 text-sm">
+                    <p class="mb-2">Chronos supports pseudo-polyphony by managing multiple independent signal chains. When <span class="variable">MONO_MODE</span> is set to $0.0$ (via `poly` command), you typically manage several $\text{adsr}$ instances and merge the outputs.</p>
+                    <p class="mb-2">**Tip:** Use macros to encapsulate each voice's DSP chain for clean polyphonic implementation.</p>
+                    <div class="code-block">
+                        <pre>
+<span class="keyword">def</span> <span class="func">Voice</span>(<span class="variable">pitch</span>, <span class="variable">gate</span>) {
+    <span class="variable">f</span> <span class="syntax">=</span> <span class="func">mtof</span>(<span class="variable">pitch</span>)
+    <span class="variable">e</span> <span class="syntax">=</span> <span class="func">adsr</span>(<span class="variable">gate</span>, <span class="number">0.01</span>, <span class="number">0.2</span>, <span class="number">0.8</span>, <span class="number">0.1</span>)
+    <span class="keyword">return</span> <span class="func">sine</span>(<span class="func">phasor</span>(<span class="variable">f</span>)) <span class="operator">*</span> <span class="variable">e</span> <span class="operator">*</span> <span class="number">0.3</span>
+}
+
+<span class="variable">voice1_pitch</span> <span class="syntax">=</span> <span class="number">60.0</span> 
+<span class="variable">voice2_pitch</span> <span class="syntax">=</span> <span class="number">67.0</span> 
+<span class="variable">voice3_pitch</span> <span class="syntax">=</span> <span class="number">72.0</span> 
+
+<span class="variable">out</span> <span class="syntax">=</span> <span class="func">Voice</span>(<span class="variable">voice1_pitch</span>, <span class="func">rhythm</span>(<span class="string">"x---"</span>)) <span class="operator">+</span> \
+        <span class="func">Voice</span>(<span class="variable">voice2_pitch</span>, <span class="func">rhythm</span>(<span class="string">"--x-"</span>)) <span class="operator">+</span> \
+        <span class="func">Voice</span>(<span class="variable">voice3_pitch</span>, <span class="func">rhythm</span>(<span class="string">"----"</span>)) <span class="comment"># Add voices to master output</span>
+</pre>
+                    </div>
+                </div>
+            </details>
+            
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        T12: Combining Rhythms for Complex Grooves
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 text-sm">
+                    <p class="mb-2">Logical operators can combine different rhythmic <span class="func">rhythm</span> nodes (which output 0 or 1) to create polyrhythms or fill patterns.</p>
+                    <div class="code-block">
+                        <pre>
+<span class="variable">kick_pat</span> <span class="syntax">=</span> <span class="func">rhythm</span>(<span class="string">"x---x---"</span>)
+<span class="variable">snare_pat</span> <span class="syntax">=</span> <span class="func">rhythm</span>(<span class="string">"----x---"</span>)
+<span class="variable">hihat_pat</span> <span class="syntax">=</span> <span class="func">rhythm</span>(<span class="string">"x-x-x-x-"</span>)
+
+<span class="comment"># The hi-hat and kick should NOT overlap, use bitwise XOR (^).</span>
+<span class="variable">anti_hat</span> <span class="syntax">=</span> <span class="variable">hihat_pat</span> <span class="operator">^</span> <span class="variable">kick_pat</span>
+<span class="variable">kick_gate</span> <span class="syntax">=</span> <span class="func">adsr</span>(<span class="variable">kick_pat</span>, <span class="number">0.001</span>, <span class="number">0.1</span>, <span class="number">0.0</span>, <span class="number">0.0</span>)
+<span class="variable">hat_gate</span> <span class="syntax">=</span> <span class="func">adsr</span>(<span class="variable">anti_hat</span>, <span class="number">0.001</span>, <span class="number">0.01</span>, <span class="number">0.0</span>, <span class="number">0.0</span>)
+
+<span class="variable">out</span> <span class="syntax">=</span> <span class="func">limit</span>(
+    <span class="variable">kick_gate</span> <span class="operator">*</span> <span class="number">0.8</span> <span class="operator">+</span> 
+    <span class="variable">snare_pat</span> <span class="operator">*</span> <span class="number">0.5</span> <span class="operator">+</span> 
+    <span class="variable">hat_gate</span> <span class="operator">*</span> <span class="number">0.3</span> <span class="operator">*</span> <span class="func">hpf</span>(<span class="func">noise</span>(), <span class="number">5000.0</span>)
+)
+</pre>
+                    </div>
+                </div>
+            </details>
+
+
+            <h3 class="text-xl text-blue-300 mt-4 mb-3">Tutorials: Core DSP Patterns</h3>
+            
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        T1: Simple Monophonic Synth (MTOF &amp; ADSR)
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 text-sm">
+                    <p class="mb-2">Minimal setup for a playable monosynth: using $\text{mtof}$ to convert pitch, driving a sine oscillator, and applying an ADSR envelope via $\text{NOTE\_GATE}$.</p>
+                    <div class="code-block">
+                        <pre>
+<span class="variable">bpm</span> <span class="syntax">=</span> <span class="number">130</span>
+<span class="variable">freq</span> <span class="syntax">=</span> <span class="variable">NOTE_PITCH</span> <span class="operator">&gt;</span> <span class="number">0</span> <span class="operator">?</span> <span class="func">mtof</span>(<span class="variable">NOTE_PITCH</span>) <span class="operator">:</span> <span class="number">0.0</span> <span class="comment"># Use operator for simple conditional calculation</span>
+<span class="variable">env</span> <span class="syntax">=</span> <span class="func">adsr</span>(<span class="variable">NOTE_GATE</span>, <span class="number">0.01</span>, <span class="number">0.5</span>, <span class="number">0.5</span>, <span class="number">0.2</span>)
+<span class="variable">tone</span> <span class="syntax">=</span> <span class="func">sine</span>(<span class="func">phasor</span>(<span class="variable">freq</span>))
+<span class="variable">out</span> <span class="syntax">=</span> <span class="variable">tone</span> <span class="operator">*</span> <span class="variable">env</span> <span class="comment"># Using multiplication operator</span>
+</pre>
+                    </div>
+                </div>
+            </details>
+
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        T2: Rhythmic Looping and Filtering
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 text-sm">
+                    <p class="mb-2">Creating a pulsing sound using the $\text{rhythm}$ generator and shaping the output with an $\text{SVF}$.</p>
+                    <div class="code-block">
+                        <pre>
+<span class="variable">bpm</span> <span class="syntax">=</span> <span class="number">120</span>
+<span class="variable">pat_trigger</span> <span class="syntax">=</span> <span class="func">rhythm</span>(<span class="string">"x---x-x-"</span>)
+<span class="variable">click_env</span> <span class="syntax">=</span> <span class="func">adsr</span>(<span class="variable">pat_trigger</span>, <span class="number">0.001</span>, <span class="number">0.08</span>, <span class="number">0.0</span>, <span class="number">0.05</span>)
+<span class="variable">pulse_sig</span> <span class="syntax">=</span> <span class="func">noise</span>() <span class="operator">*</span> <span class="variable">click_env</span> <span class="comment"># Using multiplication operator</span>
+
+<span class="comment"># Low-Pass Filter (type 1.0) at 100Hz with resonance (0.8)</span>
+<span class="variable">filtered_sig</span> <span class="syntax">=</span> <span class="func">filter</span>(<span class="variable">pulse_sig</span>, <span class="number">1.0</span>, <span class="number">100.0</span>, <span class="number">0.8</span>)
+
+<span class="variable">out</span> <span class="syntax">=</span> <span class="variable">filtered_sig</span> <span class="operator">*</span> <span class="number">1.5</span>
+</pre>
+                    </div>
+                </div>
+            </details>
+
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        T3: FM Synth and Wavefolding
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 text-sm">
+                    <p class="mb-2">Demonstrates Frequency Modulation (FM) using macros and applying the aggressive $\text{fold}$ distortion.</p>
+                    <div class="code-block">
+                        <pre>
+<span class="keyword">def</span> <span class="func">fm_op</span>(<span class="variable">carrier_freq</span>, <span class="variable">mod_sig</span>, <span class="variable">mod_amt</span>) {
+    <span class="variable">mod_freq</span> <span class="syntax">=</span> <span class="variable">carrier_freq</span> <span class="operator">+</span> <span class="variable">mod_sig</span> <span class="operator">*</span> <span class="variable">mod_amt</span>
+    <span class="keyword">return</span> <span class="func">sine</span>(<span class="func">phasor</span>(<span class="variable">mod_freq</span>))
+}
+
+<span class="variable">freq_base</span> <span class="syntax">=</span> <span class="func">mtof</span>(<span class="variable">NOTE_PITCH</span>)
+<span class="variable">env_amp</span> <span class="syntax">=</span> <span class="func">adsr</span>(<span class="variable">NOTE_GATE</span>, <span class="number">0.1</span>, <span class="number">0.9</span>, <span class="number">0.7</span>, <span class="number">0.5</span>)
+<span class="variable">mod_sig</span> <span class="syntax">=</span> <span class="func">fm_op</span>(<span class="variable">freq_base</span> <span class="operator">*</span> <span class="number">4.0</span>, <span class="number">0.0</span>, <span class="number">0.0</span>) <span class="comment"># Modulator at 4x base freq</span>
+<span class="variable">fm_out</span> <span class="syntax">=</span> <span class="func">fm_op</span>(<span class="variable">freq_base</span>, <span class="variable">mod_sig</span>, <span class="variable">freq_base</span> <span class="operator">*</span> <span class="number">5.0</span>) <span class="comment"># FM Index 5.0 * base freq</span>
+
+<span class="variable">folded</span> <span class="syntax">=</span> <span class="func">fold</span>(<span class="variable">fm_out</span>, <span class="number">0.5</span>)
+<span class="variable">out</span> <span class="syntax">=</span> <span class="variable">folded</span> <span class="operator">*</span> <span class="variable">env_amp</span>
+</pre>
+                    </div>
+                </div>
+            </details>
+
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        T4: Slew-Limited Wobble Bass
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 text-sm">
+                    <p class="mb-2">Using $\text{slew}$ to smooth a high-frequency LFO sweep controlling a filter, creating the characteristic "wobble" effect.</p>
+                    <div class="code-block">
+                        <pre>
+<span class="variable">freq_base</span> <span class="syntax">=</span> <span class="func">mtof</span>(<span class="variable">NOTE_PITCH</span>)
+<span class="variable">saw</span> <span class="syntax">=</span> <span class="func">map</span>(<span class="func">phasor</span>(<span class="variable">freq_base</span>), <span class="number">0</span>, <span class="number">1</span>, <span class="number">-1</span>, <span class="number">1</span>)
+
+<span class="variable">lfo_mod</span> <span class="syntax">=</span> <span class="func">UnipolarLFO</span>(<span class="number">8.0</span>, <span class="number">300.0</span>, <span class="number">3000.0</span>) <span class="comment"># Fast 8Hz cutoff sweep range</span>
+<span class="variable">slew_rate</span> <span class="syntax">=</span> <span class="number">10000.0</span> <span class="comment"># Slew limit applied to the LFO modulation</span>
+<span class="variable">smooth_lfo</span> <span class="syntax">=</span> <span class="func">slew</span>(<span class="variable">lfo_mod</span>, <span class="variable">slew_rate</span>)
+
+<span class="variable">env_amp</span> <span class="syntax">=</span> <span class="func">adsr</span>(<span class="variable">NOTE_GATE</span>, <span class="number">0.005</span>, <span class="number">0.1</span>, <span class="number">1.0</span>, <span class="number">0.1</span>)
+
+<span class="variable">filt_out</span> <span class="syntax">=</span> <span class="func">filter</span>(<span class="variable">saw</span>, <span class="number">1.0</span>, <span class="variable">smooth_lfo</span>, <span class="number">20.0</span>) <span class="comment"># High Q (20.0) LP filter</span>
+
+<span class="variable">out</span> <span class="syntax">=</span> <span class="func">limit</span>(<span class="variable">filt_out</span> <span class="operator">*</span> <span class="variable">env_amp</span>)
+</pre>
+                    </div>
+                </div>
+            </details>
+
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        T5: Song Arrangement (Bar-Based Switching) - Using Operators
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 text-sm">
+                    <p class="mb-2">Using operators ($\text{&gt;=}$, $\text{&lt;}$, $\text{&amp;&amp;}$) for bar-based song section control.</p>
+                    <div class="code-block">
+                        <pre>
+<span class="variable">bpm</span> <span class="syntax">=</span> <span class="number">128</span>
+<span class="variable">sig_bass</span> <span class="syntax">=</span> <span class="func">sine</span>(<span class="func">phasor</span>(<span class="number">55.0</span>)) <span class="operator">*</span> <span class="number">0.5</span>
+<span class="variable">mix_amt</span> <span class="syntax">=</span> <span class="number">0.0</span>
+
+<span class="comment"># Section 1: Bars 0.0 to 8.0</span>
+<span class="keyword">if</span> (<span class="variable">bars</span> <span class="operator">&lt;</span> <span class="number">8.0</span>) {
+    <span class="variable">is_active</span> <span class="syntax">=</span> <span class="func">rhythm</span>(<span class="string">"x---"</span>) <span class="operator">&gt;</span> <span class="number">0.5</span>
+    <span class="keyword">if</span> (<span class="variable">is_active</span>) { <span class="variable">mix_amt</span> <span class="syntax">=</span> <span class="number">0.8</span> }
+}
+
+<span class="comment"># Section 2: Bars 8.0 up to 12.0 (Breakdown)</span>
+<span class="keyword">if</span> (<span class="variable">bars</span> <span class="operator">&gt;=</span> <span class="number">8.0</span> <span class="operator">&amp;&amp;</span> <span class="variable">bars</span> <span class="operator">&lt;</span> <span class="number">12.0</span>) {
+    <span class="variable">mix_amt</span> <span class="syntax">=</span> <span class="number">0.0</span>
+}
+
+<span class="comment"># Section 3: Bars 12.0 onwards</span>
+<span class="keyword">if</span> (<span class="variable">bars</span> <span class="operator">&gt;=</span> <span class="number">12.0</span>) {
+    <span class="variable">is_active_fast</span> <span class="syntax">=</span> <span class="func">rhythm</span>(<span class="string">"x-x-"</span>) <span class="operator">&gt;</span> <span class="number">0.5</span>
+    <span class="keyword">if</span> (<span class="variable">is_active_fast</span>) { <span class="variable">mix_amt</span> <span class="syntax">=</span> <span class="number">1.0</span> }
+}
+
+<span class="variable">out</span> <span class="syntax">=</span> <span class="variable">sig_bass</span> <span class="operator">*</span> <span class="variable">mix_amt</span>
+</pre>
+                    </div>
+                </div>
+            </details>
+
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        T6: Portamento (Pitch Glide)
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 text-sm">
+                    <p class="mb-2">Use the <span class="func">slew</span> operator on the discrete <span class="variable">NOTE_PITCH</span> signal before MTOF conversion.</p>
+                    <div class="code-block">
+                        <pre>
+<span class="variable">glide_rate</span> <span class="syntax">=</span> <span class="number">150.0</span> 
+<span class="variable">smooth_pitch</span> <span class="syntax">=</span> <span class="func">slew</span>(<span class="variable">NOTE_PITCH</span>, <span class="variable">glide_rate</span>)
+<span class="variable">freq</span> <span class="syntax">=</span> <span class="func">mtof</span>(<span class="variable">smooth_pitch</span>)
+<span class="variable">env</span> <span class="syntax">=</span> <span class="func">adsr</span>(<span class="variable">NOTE_GATE</span>, <span class="number">0.01</span>, <span class="number">0.2</span>, <span class="number">0.8</span>, <span class="number">0.1</span>)
+<span class="variable">out</span> <span class="syntax">=</span> <span class="func">sine</span>(<span class="func">phasor</span>(<span class="variable">freq</span>)) <span class="operator">*</span> <span class="variable">env</span>
+</pre>
+                    </div>
+                </div>
+            </details>
+            
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        T7: LFO with Sample &amp; Hold Quantization
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 text-sm">
+                    <p class="mb-2">Use $\text{sah}$ to freeze LFO values on rhythmic trigger, creating stepped random modulation.</p>
+                    <div class="code-block">
+                        <pre>
+<span class="variable">lfo_source</span> <span class="syntax">=</span> <span class="func">UnipolarLFO</span>(<span class="number">0.1</span>, <span class="number">200.0</span>, <span class="number">5000.0</span>) <span class="comment"># Slow LFO</span>
+<span class="variable">trigger</span> <span class="syntax">=</span> <span class="func">phasor</span>(<span class="number">4.0</span>) <span class="comment"># 4Hz (every quarter note) trigger</span>
+<span class="variable">stepped_mod</span> <span class="syntax">=</span> <span class="func">sah</span>(<span class="variable">lfo_source</span>, <span class="variable">trigger</span>)
+
+<span class="variable">out</span> <span class="syntax">=</span> <span class="func">filter</span>(<span class="variable">sig_in</span>, <span class="number">1.0</span>, <span class="variable">stepped_mod</span>, <span class="number">5.0</span>)
+</pre>
+                    </div>
+                </div>
+            </details>
+            
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        T8: Basic Distortion Chain (Tanh &rarr; Fold)
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300 text-sm">
+                    <p class="mb-2">Combine soft clipping and wave folding for aggressive harmonic generation.</p>
+                    <div class="code-block">
+                        <pre>
+<span class="variable">sig_in</span> <span class="syntax">=</span> <span class="variable">SAWTOOTH_WAVE</span> <span class="operator">*</span> <span class="number">2.0</span> <span class="comment"># Boost for more distortion</span>
+<span class="variable">soft_clipped</span> <span class="syntax">=</span> <span class="func">tanh</span>(<span class="variable">sig_in</span>)
+<span class="variable">folded_out</span> <span class="syntax">=</span> <span class="func">fold</span>(<span class="variable">soft_clipped</span>, <span class="number">0.6</span>)
+<span class="variable">out</span> <span class="syntax">=</span> <span class="variable">folded_out</span> <span class="operator">*</span> <span class="number">0.5</span>
+</pre>
+                    </div>
+                </div>
+            </details>
+
+            <h3 class="text-xl text-blue-300 mt-4 mb-3">Snippet Library (Copy &amp; Paste)</h3>
+            
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        [Library] Standard Waveforms
+                    </span>
+                </summary>
+                <div class="code-block">
+                    <pre class="code-snippet">
+<span class="variable">f</span> <span class="syntax">=</span> <span class="number">220.0</span>
+<span class="variable">p</span> <span class="syntax">=</span> <span class="func">phasor</span>(<span class="variable">f</span>)
+
+<span class="variable">SINE_WAVE</span> <span class="syntax">=</span> <span class="func">sine</span>(<span class="variable">p</span>)
+
+<span class="variable">SAWTOOTH_WAVE</span> <span class="syntax">=</span> <span class="variable">p</span> <span class="operator">*</span> <span class="number">2.0</span> <span class="operator">-</span> <span class="number">1.0</span>
+
+<span class="variable">TRIANGLE_WAVE</span> <span class="syntax">=</span> <span class="func">abs</span>(<span class="variable">p</span> <span class="operator">*</span> <span class="number">4.0</span> <span class="operator">-</span> <span class="number">2.0</span>) <span class="operator">-</span> <span class="number">1.0</span>
+
+<span class="variable">SQUARE_WAVE</span> <span class="syntax">=</span> <span class="func">gt</span>(<span class="variable">p</span>, <span class="number">0.5</span>) <span class="operator">*</span> <span class="number">2.0</span> <span class="operator">-</span> <span class="number">1.0</span>
+</pre>
+                </div>
+            </details>
+            
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        [Library] Utilities and Modulation Macros
+                    </span>
+                </summary>
+                <div class="code-block">
+                    <pre class="code-snippet">
+<span class="keyword">def</span> <span class="func">BipolarLFO</span>(<span class="variable">rate</span>, <span class="variable">depth</span>) {
+    <span class="keyword">return</span> <span class="func">sine</span>(<span class="func">phasor</span>(<span class="variable">rate</span>)) <span class="operator">*</span> <span class="variable">depth</span>
+}
+
+<span class="keyword">def</span> <span class="func">UnipolarLFO</span>(<span class="variable">rate</span>, <span class="variable">min</span>, <span class="variable">max</span>) {
+    <span class="variable">bipolar</span> <span class="syntax">=</span> <span class="func">sine</span>(<span class="func">phasor</span>(<span class="variable">rate</span>))
+    <span class="keyword">return</span> <span class="func">map</span>(<span class="variable">bipolar</span>, <span class="number">-1</span>, <span class="number">1</span>, <span class="variable">min</span>, <span class="variable">max</span>)
+}
+
+<span class="keyword">def</span> <span class="func">FeedbackDelay</span>(<span class="variable">sig_in</span>, <span class="variable">time</span>, <span class="variable">fb</span>, <span class="variable">mix</span>) {
+    <span class="variable">d</span> <span class="syntax">=</span> <span class="func">delay</span>(<span class="variable">sig_in</span>, <span class="variable">time</span>, <span class="variable">fb</span>)
+    <span class="keyword">return</span> <span class="func">lerp</span>(<span class="variable">sig_in</span>, <span class="variable">d</span>, <span class="variable">mix</span>)
+}
+
+<span class="variable">random_hold_pitch</span> <span class="syntax">=</span> <span class="func">sah</span>(<span class="func">map</span>(<span class="func">noise</span>(), <span class="number">-1</span>, <span class="number">1</span>, <span class="number">48</span>, <span class="number">84</span>), <span class="func">phasor</span>(<span class="number">1.0</span>))
+</pre>
+                </div>
+            </details>
+            
+            <details class="mb-3">
+                <summary class="accordion-header flex items-center justify-between font-semibold text-lg">
+                    <span class="flex items-center">
+                        <svg class="icon-arrow w-3 h-3 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        [Library] Complex Gates and Pitch Quantization
+                    </span>
+                </summary>
+                <div class="p-3 text-gray-300">
+                    <div class="code-block">
+                        <pre class="code-snippet">
+<span class="variable">rhythm_gate</span> <span class="syntax">=</span> <span class="func">rhythm</span>(<span class="string">"x-x-x---x---x-x-"</span>)
+<span class="variable">bar_trigger</span> <span class="syntax">=</span> <span class="variable">bars</span> <span class="operator">%</span> <span class="number">4.0</span> <span class="operator">==</span> <span class="number">0.0</span>
+
+<span class="comment"># Using bitwise OR for boolean logic since comparison ops return 0 or 1</span>
+<span class="variable">COMPLEX_GATE</span> <span class="syntax">=</span> <span class="variable">rhythm_gate</span> <span class="operator">|</span> <span class="variable">bar_trigger</span>
+
+<span class="variable">PITCH_IN</span> <span class="syntax">=</span> <span class="variable">NOTE_PITCH</span> <span class="operator">+</span> <span class="func">BipolarLFO</span>(<span class="number">0.2</span>, <span class="number">0.5</span>)
+<span class="variable">QUANTIZED_PITCH</span> <span class="syntax">=</span> <span class="func">round</span>(<span class="variable">PITCH_IN</span>)
+</pre>
+                    </div>
+                </div>
+            </details>
+
+        </section>
+
+        <footer class="mt-8 text-center text-gray-500 text-xs border-t border-gray-600 pt-3">
+            Chronos Engine v9.5 - Modular OP System.
+        </footer>
+
+    </div>
+</body>
+</html>
