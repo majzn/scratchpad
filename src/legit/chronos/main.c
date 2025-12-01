@@ -1,3 +1,11 @@
+/**
+ * @file main.c
+ * @brief Application entry point for the Chronos synthesizer TUI.
+ *
+ * This file implements the Text User Interface (TUI), audio callbacks,
+ * input handling, and visualization logic for the Chronos engine.
+ */
+
 #define _CRT_SECURE_NO_WARNINGS
 #define CR_IMPLEMENTATION
 #include "chronos.h"
@@ -17,38 +25,61 @@
 #include <sys/stat.h>
 #include <time.h>
 
+/** @brief Key code for Up Arrow. */
 #define K_UP 1000
+/** @brief Key code for Down Arrow. */
 #define K_DOWN 1001
+/** @brief Key code for Left Arrow. */
 #define K_LEFT 1002
+/** @brief Key code for Right Arrow. */
 #define K_RIGHT 1003
+/** @brief Key code for Home key. */
 #define K_HOME 1004
+/** @brief Key code for End key. */
 #define K_END 1005
+/** @brief Key code for Delete key. */
 #define K_DEL 1006
+/** @brief ASCII code for Tab. */
 #define K_TAB 9
+/** @brief ASCII code for Backspace. */
 #define K_BACKSPACE 127
+/** @brief ASCII code for Enter. */
 #define K_ENTER 13
+/** @brief ASCII code for Escape. */
 #define K_ESC 27
+/** @brief Key code for Page Up. */
 #define K_PGUP 1007
+/** @brief Key code for Page Down. */
 #define K_PGDN 1008
+/** @brief ASCII code for Ctrl+S (XOFF). */
 #define K_CTRL_S 19
+/** @brief ASCII code for Ctrl+O (SI). */
 #define K_CTRL_O 15
 
+/** @brief FFT window size. */
 #define FFT_SIZE 256
+/** @brief Number of history lines for waterfall visualization. */
 #define WATERFALL_HISTORY 64
+/** @brief Smoothing factor for waterfall visualization (0.0 to 1.0). */
 #define WATERFALL_SMOOTHING 0.8
+/** @brief Mathematical constant PI. */
 #define M_PI 3.14159265358979323846
 
 #ifndef MZN_ATTR_BOLD
+/** @brief Terminal attribute for bold text. */
 #define MZN_ATTR_BOLD 0x08
 #endif
 
-static int term_w = 80;
-static int term_h = 24;
-static int needs_resize = 1;
+static int term_w = 80; /**< Current terminal width. */
+static int term_h = 24; /**< Current terminal height. */
+static int needs_resize = 1; /**< Flag indicating terminal resize event occurred. */
 
+/**
+ * @brief Complex number structure for FFT.
+ */
 typedef struct {
-  float r;
-  float i;
+  float r; /**< Real part. */
+  float i; /**< Imaginary part. */
 } cpx;
 
 #ifndef _WIN32
@@ -60,6 +91,10 @@ typedef struct {
 #include <unistd.h>
 
 static struct termios oldt, newt;
+
+/**
+ * @brief Configures the terminal for non-blocking input (raw mode).
+ */
 void set_non_blocking_input() {
   tcgetattr(STDIN_FILENO, &oldt);
   newt = oldt;
@@ -68,8 +103,16 @@ void set_non_blocking_input() {
   tcsetattr(STDIN_FILENO, TCSANOW, &newt);
   fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
 }
+
+/**
+ * @brief Restores the original terminal settings.
+ */
 void restore_input() { tcsetattr(STDIN_FILENO, TCSANOW, &oldt); }
 
+/**
+ * @brief Signal handler for window resize events (SIGWINCH).
+ * @param sig The signal number.
+ */
 void handle_winch(int sig) {
   struct winsize w;
   if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0) {
@@ -81,6 +124,10 @@ void handle_winch(int sig) {
   }
 }
 
+/**
+ * @brief Reads a key event from stdin, parsing escape sequences.
+ * @return The parsed key code or -1 if no input.
+ */
 int get_key_evt() {
   unsigned char c;
   if (read(STDIN_FILENO, &c, 1) != 1)
@@ -144,6 +191,10 @@ int get_key_evt() {
 #include <conio.h>
 #include <windows.h>
 static DWORD orig_console_mode;
+
+/**
+ * @brief Configures Windows Console for non-blocking input.
+ */
 void set_non_blocking_input() {
   HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
   GetConsoleMode(hIn, &orig_console_mode);
@@ -151,10 +202,17 @@ void set_non_blocking_input() {
   mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
   SetConsoleMode(hIn, mode);
 }
+
+/**
+ * @brief Restores original Windows Console mode.
+ */
 void restore_input() {
   SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), orig_console_mode);
 }
 
+/**
+ * @brief Checks if the console buffer size has changed.
+ */
 void check_resize() {
   CONSOLE_SCREEN_BUFFER_INFO csbi;
   if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
@@ -168,6 +226,10 @@ void check_resize() {
   }
 }
 
+/**
+ * @brief Reads a key event from Windows Console input.
+ * @return The parsed key code or -1 if no input.
+ */
 int get_key_evt() {
   check_resize();
   if (_kbhit()) {
@@ -222,13 +284,23 @@ int get_key_evt() {
 #define THEME_WARN MZN_ATTR_FG_RED
 #define THEME_MUTED MZN_ATTR_FG_MAGENTA
 
+/**
+ * @brief Rectangle structure for UI layout.
+ */
 typedef struct {
-  int x;
-  int y;
-  int w;
-  int h;
+  int x; /**< Top-left X coordinate. */
+  int y; /**< Top-left Y coordinate. */
+  int w; /**< Width. */
+  int h; /**< Height. */
 } Rect;
 
+/**
+ * @brief Draws a bordered panel on the terminal.
+ * @param r The rectangle defining the panel bounds.
+ * @param title Optional title to display on top border.
+ * @param active If true, highlights the border.
+ * @param fill_char Character to fill the background with.
+ */
 static void draw_panel(Rect r, const char *title, int active, int fill_char) {
   int attr_border = active ? THEME_BORDER_ACTIVE : THEME_BORDER;
   int attr_fill = THEME_BG | THEME_FG;
@@ -265,6 +337,15 @@ static void draw_panel(Rect r, const char *title, int active, int fill_char) {
   }
 }
 
+/**
+ * @brief Draws a vertical progress bar/meter.
+ * @param x X coordinate.
+ * @param y Y coordinate.
+ * @param h Height of the bar.
+ * @param val Normalized value (0.0 to 1.0).
+ * @param color_low Color for low intensity.
+ * @param color_high Color for high intensity.
+ */
 static void draw_progress_v(int x, int y, int h, double val, int color_low,
                             int color_high) {
   if (x < 0 || x >= term_w || y < 0 || y + h > term_h)
@@ -291,60 +372,69 @@ static void draw_progress_v(int x, int y, int h, double val, int color_low,
 #define EDITOR_MAX_LINES 2048
 #define EDITOR_MAX_COL 256
 
-static char cmd_history[MAX_HISTORY][MAX_LINE_LEN];
-static int cmd_history_count = 0;
-static int cmd_history_idx = 0;
-static char log_history[MAX_LOG_LINES][MAX_LINE_LEN];
-static int log_history_count = 0;
-static char loaded_filename[MAX_LINE_LEN] = {0};
-static time_t last_mod_time = 0;
-static cr_engine *engine = NULL;
+static char cmd_history[MAX_HISTORY][MAX_LINE_LEN]; /**< Command history buffer. */
+static int cmd_history_count = 0; /**< Number of history entries. */
+static int cmd_history_idx = 0;   /**< Current history navigation index. */
+static char log_history[MAX_LOG_LINES][MAX_LINE_LEN]; /**< Log message buffer. */
+static int log_history_count = 0; /**< Number of log messages. */
+static char loaded_filename[MAX_LINE_LEN] = {0}; /**< Currently open filename. */
+static time_t last_mod_time = 0; /**< Last modification time of file for hot-reloading. */
+static cr_engine *engine = NULL; /**< Pointer to the audio engine instance. */
 
-static char editor_lines[EDITOR_MAX_LINES][EDITOR_MAX_COL];
-static int editor_line_count = 0;
-static int ed_cx = 0, ed_cy = 0, ed_scroll = 0;
-static char ed_msg[64] = {0};
+static char editor_lines[EDITOR_MAX_LINES][EDITOR_MAX_COL]; /**< Editor content buffer. */
+static int editor_line_count = 0; /**< Number of lines in editor. */
+static int ed_cx = 0, ed_cy = 0, ed_scroll = 0; /**< Cursor x, y and scroll offset. */
+static char ed_msg[64] = {0}; /**< Editor status message. */
 
-static int popup_mode = 0;
-static char popup_input_buf[64] = {0};
-static int popup_input_pos = 0;
+static int popup_mode = 0; /**< Popup state (0=None, 1=New, 2=SaveAs, 3=Confirm). */
+static char popup_input_buf[64] = {0}; /**< Buffer for popup text input. */
+static int popup_input_pos = 0; /**< Cursor position in popup input. */
 
-static FILE *rec_file = NULL;
-static int is_recording = 0;
-static long rec_bytes = 0;
+static FILE *rec_file = NULL; /**< File handle for WAV recording. */
+static int is_recording = 0;  /**< Flag indicating recording state. */
+static long rec_bytes = 0;    /**< Total bytes recorded. */
 
-static volatile double waveform_l[WAVEFORM_BUFFER_SIZE];
-static volatile double waveform_r[WAVEFORM_BUFFER_SIZE];
-static volatile int waveform_head = 0;
-static volatile double cpu_load = 0.0;
-static volatile double peak_l = 0.0, peak_r = 0.0;
+static volatile double waveform_l[WAVEFORM_BUFFER_SIZE]; /**< Left channel visualization buffer. */
+static volatile double waveform_r[WAVEFORM_BUFFER_SIZE]; /**< Right channel visualization buffer. */
+static volatile int waveform_head = 0; /**< Write head for waveform buffers. */
+static volatile double cpu_load = 0.0; /**< Estimated CPU load percentage. */
+static volatile double peak_l = 0.0, peak_r = 0.0; /**< Peak amplitude meters. */
 
-static int ui_mode = 0;
-static int vis_mode = 0;
-static int selected_param_idx = 0;
-static int log_scroll_offset = 0;
-static int triggers[8] = {0};
+static int ui_mode = 0; /**< UI State (0=Console, 1=Params, 2=Help, 3=Editor). */
+static int vis_mode = 0; /**< Visualization mode (0=Scope, 1=XY, 2=Waterfall). */
+static int selected_param_idx = 0; /**< Index of selected parameter in Param mode. */
+static int log_scroll_offset = 0; /**< Scroll offset for log view. */
+static int triggers[8] = {0}; /**< State of manual triggers. */
 
-static float waterfall_buf[WATERFALL_HISTORY][FFT_SIZE / 2];
-static int waterfall_head = 0;
-static float fft_in[FFT_SIZE];
-static cpx fft_out[FFT_SIZE];
-static int fft_idx = 0;
+static float waterfall_buf[WATERFALL_HISTORY][FFT_SIZE / 2]; /**< History buffer for waterfall. */
+static int waterfall_head = 0; /**< Write head for waterfall buffer. */
+static float fft_in[FFT_SIZE]; /**< Input buffer for FFT. */
+static cpx fft_out[FFT_SIZE]; /**< Output buffer for FFT. */
+static int fft_idx = 0; /**< Current index in FFT input buffer. */
 
+/** @brief Adds two complex numbers. */
 static cpx cpx_add(cpx a, cpx b) {
   cpx r = {a.r + b.r, a.i + b.i};
   return r;
 }
+/** @brief Subtracts two complex numbers. */
 static cpx cpx_sub(cpx a, cpx b) {
   cpx r = {a.r - b.r, a.i - b.i};
   return r;
 }
+/** @brief Multiplies two complex numbers. */
 static cpx cpx_mul(cpx a, cpx b) {
   cpx r = {a.r * b.r - a.i * b.i, a.r * b.i + a.i * b.r};
   return r;
 }
+/** @brief Calculates magnitude of complex number. */
 static float cpx_mag(cpx a) { return sqrtf(a.r * a.r + a.i * a.i); }
 
+/**
+ * @brief Recursive Cooley-Tukey FFT implementation.
+ * @param x Array of complex numbers (input/output).
+ * @param n Size of the array (must be power of 2).
+ */
 static void simple_fft(cpx *x, int n) {
   if (n <= 1)
     return;
@@ -365,6 +455,11 @@ static void simple_fft(cpx *x, int n) {
   }
 }
 
+/**
+ * @brief Logs a message to the TUI log history.
+ * @param fmt Printf-style format string.
+ * @param ... Variadic arguments.
+ */
 static void tui_log(const char *fmt, ...) {
   va_list args;
   char temp_buffer[MAX_LINE_LEN];
@@ -380,6 +475,11 @@ static void tui_log(const char *fmt, ...) {
   log_scroll_offset = 0;
 }
 
+/**
+ * @brief Callback for engine logs, redirects to TUI log.
+ * @param level Log severity level.
+ * @param msg The log message.
+ */
 static void engine_log_cb(int level, const char *msg) {
   char prefix[16] = "";
   switch (level) {
@@ -399,6 +499,10 @@ static void engine_log_cb(int level, const char *msg) {
   tui_log("[%s] %s", prefix, msg);
 }
 
+/**
+ * @brief Saves the current editor content to disk and compiles it.
+ * @param filename The destination path.
+ */
 static void editor_save_to_disk(const char *filename) {
   FILE *f = fopen(filename, "w");
   if (f) {
@@ -430,6 +534,11 @@ static void editor_save_to_disk(const char *filename) {
   }
 }
 
+/**
+ * @brief Loads a script from disk and compiles it.
+ * @param filename The path to load.
+ * @return 1 on success, 0 on failure.
+ */
 static int load_script(const char *filename) {
   FILE *f = fopen(filename, "rb");
   if (f) {
@@ -464,6 +573,10 @@ static int load_script(const char *filename) {
   return 0;
 }
 
+/**
+ * @brief Loads a file into the editor buffer.
+ * @param filename The path to load.
+ */
 static void editor_load_file(const char *filename) {
   FILE *f = fopen(filename, "r");
   editor_line_count = 0;
@@ -488,12 +601,19 @@ static void editor_load_file(const char *filename) {
   }
 }
 
+/**
+ * @brief Initiates the "Save As" popup sequence.
+ */
 static void open_popup_save_as() {
   popup_mode = 2;
   popup_input_buf[0] = 0;
   popup_input_pos = 0;
 }
 
+/**
+ * @brief Handles input when a popup is active.
+ * @param key The key code pressed.
+ */
 static void handle_popup_input(int key) {
   if (popup_mode == 1) {
     if (key == 'y' || key == 'Y' || key == K_ENTER) {
@@ -540,6 +660,10 @@ static void handle_popup_input(int key) {
   }
 }
 
+/**
+ * @brief Draws the popup window overlay.
+ * @param mode The current popup mode.
+ */
 static void draw_popup_window(int mode) {
   int w = 42, h = 9;
   int x = (term_w - w) / 2;
@@ -590,6 +714,12 @@ static void draw_popup_window(int mode) {
   }
 }
 
+/**
+ * @brief Writes standard RIFF WAVE header to file.
+ * @param f File pointer.
+ * @param sample_rate Audio sample rate.
+ * @param channels Number of channels.
+ */
 static void write_wav_header(FILE *f, int sample_rate, int channels) {
   int data_sz = 0x7fffffff;
   int byte_rate = sample_rate * channels * 2;
@@ -613,6 +743,11 @@ static void write_wav_header(FILE *f, int sample_rate, int channels) {
   fwrite(&data_sz, 4, 1, f);
 }
 
+/**
+ * @brief Updates the size fields in the WAV header after recording.
+ * @param f File pointer.
+ * @param bytes Total bytes of audio data written.
+ */
 static void update_wav_header_size(FILE *f, long bytes) {
   if (!f)
     return;
@@ -623,6 +758,9 @@ static void update_wav_header_size(FILE *f, long bytes) {
   fwrite(&bytes, 4, 1, f);
 }
 
+/**
+ * @brief Toggles recording on and off.
+ */
 static void toggle_recording() {
   if (is_recording) {
     if (rec_file) {
@@ -641,6 +779,16 @@ static void toggle_recording() {
   }
 }
 
+/**
+ * @brief Main Audio Callback function.
+ * * Called by the audio backend to request new samples.
+ * Executes the DSP graph via cr_process() and handles FFT/Scope buffering.
+ * * @param buf Output buffer for audio samples (interleaved short).
+ * @param frames Number of frames requested.
+ * @param sr Sample rate.
+ * @param ch Number of channels.
+ * @param data User data pointer (unused).
+ */
 void audio_cb(short *buf, int frames, int sr, int ch, void *data) {
   int i;
   double pk_l = 0.0, pk_r = 0.0;
@@ -736,6 +884,14 @@ typedef struct {
   int index;
   int input_const_node_idx;
 } ui_param_t;
+
+/**
+ * @brief Retrieves all exposed "param" nodes from the engine.
+ * @param ctx The active context.
+ * @param out_params Output array.
+ * @param max_p Maximum params to retrieve.
+ * @return Number of parameters found.
+ */
 static int get_ui_params(cr_context *ctx, ui_param_t *out_params, int max_p) {
   int count = 0;
   for (int i = 0; i < ctx->var_count && count < max_p; i++) {
@@ -755,6 +911,10 @@ static int get_ui_params(cr_context *ctx, ui_param_t *out_params, int max_p) {
   return count;
 }
 
+/**
+ * @brief Handles keyboard input for the code editor.
+ * @param key Key code.
+ */
 static void editor_handle_input(int key) {
   ed_msg[0] = 0;
   if (key == K_ESC) {
@@ -826,6 +986,10 @@ static void editor_handle_input(int key) {
   }
 }
 
+/**
+ * @brief Adds a command to the command-line history.
+ * @param line The command string.
+ */
 static void add_history(const char *line) {
   if (strlen(line) == 0)
     return;
@@ -842,6 +1006,11 @@ static void add_history(const char *line) {
   cmd_history_idx = cmd_history_count;
 }
 
+/**
+ * @brief Renders the 3D Spectral Terrain waterfall.
+ * * Implements a horizon-based hidden-line removal algorithm.
+ * * @param r The rectangle to draw into.
+ */
 static void draw_waterfall_3d(Rect r) {
   if (r.w <= 0 || r.h <= 0)
     return;
@@ -892,6 +1061,11 @@ static void draw_waterfall_3d(Rect r) {
   free(horizon);
 }
 
+/**
+ * @brief Main drawing function for the Modern UI.
+ * @param buf Current command line buffer.
+ * @param pos Current cursor position in command line.
+ */
 static void draw_modern_ui(const char *buf, int pos) {
   if (needs_resize) {
     mzn_term_resize(term_w, term_h);
@@ -1125,6 +1299,12 @@ static void draw_modern_ui(const char *buf, int pos) {
   mzn_term_flip_buffer();
 }
 
+/**
+ * @brief Application Entry Point.
+ * @param argc Argument count.
+ * @param argv Argument vector.
+ * @return 0 on success.
+ */
 int main(int argc, char **argv) {
   ss_audio_t *audio;
   char line_buf[MAX_LINE_LEN] = {0};
