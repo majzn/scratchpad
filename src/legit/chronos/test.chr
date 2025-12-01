@@ -1,31 +1,95 @@
-bpm = 130.0
-ENV_FREQ = 1.0
-ENV_DURATION = 0.2
+# CHRONOS PURE - FULL SONG STRUCTURE
+# ==================================
+bpm = 128
 
-ENV_PHASOR = phasor(ENV_FREQ)
-ENV = adsr(ENV_PHASOR, ENV_DURATION, 0.5, 0.5, 0.1, 1)
+# --- 1. PATTERN CONSTRUCTION ---
+# We build small building blocks first
 
-LFO_FREQ = 0.1
-LFO_PHASOR = phasor(LFO_FREQ)
-LFO_OUT = sine(LFO_PHASOR)
+# Bassline Parts (Root: 55Hz/110Hz - A)
+# "A" Pattern: Basic pulse
+b_part_a = gen("55 0 55 0 110 0 55 0")
 
-PITCH = 440.0
-PITCH_MOD = mul(LFO_OUT, 12.0)
-FINAL_PITCH = add(PITCH, PITCH_MOD)
-FREQ = mtof(FINAL_PITCH)
+# "B" Pattern: Octave jumps
+b_part_b = gen("55 55 110 110 55 0 165 0")
 
-RAW_PHASOR = phasor(FREQ)
-RAW_OSC = sine(RAW_PHASOR)
+# "C" Pattern: Fast roll (Breakdown)
+b_part_c = gen("110 110 110 110")
 
-CUTOFF = map(LFO_OUT, -1.0, 1.0, 400.0, 1000.0)
-FILTERED = filter(RAW_OSC, 0.0, CUTOFF, 5.0)
+# --- SONG ASSEMBLY ---
+# We use (+) to concatenate and (*) to repeat
+# Structure: Intro (A x 2) -> Verse (A x 2 + B x 2) -> Drop (C x 4)
 
-ENV_APPLIED = mul(FILTERED, ENV)
+# 1. Build the master sequence buffers
+# Note: We multiply by numbers to repeat sections
+bass_full = (b_part_a * 4) + (b_part_b * 4) + (b_part_c * 8)
 
-DELAYED = delay(ENV_APPLIED, 0.5, 0.4)
+# 2. Build the Kick Drum pattern
+# 1 = Kick, 0 = Rest
+k_basic = gen("1 0 0 0")
+k_roll  = gen("1 1 1 1")
+kick_full = (k_basic * 16) + (k_roll * 8) 
 
-FINAL_SIG = add(ENV_APPLIED, DELAYED)
+# 3. Build the Hi-Hat pattern
+h_closed = gen("0 0 1 0")
+h_open   = gen("0 1 0 1")
+hat_full = (h_closed * 16) + (h_open * 8)
 
-MASTER_GAIN = 0.3
-OUTPUT = mul(FINAL_SIG, MASTER_GAIN)
-out = OUTPUT
+# --- 2. SEQUENCERS ---
+# We need a master clock that runs through these long buffers.
+# We determine the total length. Each 'part' above was 8 steps.
+# A*4 (32) + B*4 (32) + C*8 (32) = 96 steps total.
+
+# We need a slow phasor that resets every 96 beats? 
+# No, we can just use a standard transport counter.
+# The 'seq' operator loops automatically if the buffer is long.
+
+# 16th note clock for triggers
+tick = clock(4.0)
+
+# Read from our massive song buffers
+# Divisor 4.0 means 4 steps per beat (16th notes)
+f_bass = seq(bass_full, 4.0)
+t_kick = seq(kick_full, 4.0)
+t_hat  = seq(hat_full, 4.0)
+
+# --- 3. INSTRUMENT DESIGN ---
+
+# -- KICK --
+# Trigger when the sequence outputs > 0
+# We use the raw sequence value as the trigger
+k_env = perc(t_kick, 0.001, 0.3) 
+k_osc = sine(55 + (k_env * 120))
+kick_out = k_osc * k_env
+
+# -- BASS --
+# Only play if frequency > 0 (gating)
+# We create a gate signal from the frequency itself
+b_gate = if(f_bass > 1, 1, 0)
+
+# Filter Envelope
+b_trig = clock(4.0) * b_gate 
+b_env  = perc(b_trig, 0.01, 0.25)
+
+# Sound Generation (Saw + Filter)
+b_osc = saw(f_bass)
+b_cut = 150 + (b_env * 3500)
+# Add some resonance (Q = 3.0)
+b_filt = filter(b_osc, 0, b_cut, 3.0) 
+bass_out = b_filt * b_env * 0.7
+
+# -- HATS --
+h_env = perc(t_hat, 0.005, 0.05)
+hat_out = noise(0) * h_env * 0.3
+
+# --- 4. GLOBAL EFFECTS & MIX ---
+
+# Simple delay effect on the Hi-Hats
+# delay(input, time_seconds, feedback)
+hat_dub = delay(hat_out, 0.25, 0.4) * 0.3
+
+# Mix everything
+mix = kick_out + bass_out + hat_out + hat_dub
+
+# Master Volume
+vol : = 0.5
+out = mix * vol
