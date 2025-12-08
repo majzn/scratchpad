@@ -338,32 +338,59 @@ body.cinematic-mode #canvas-container {
                 <div class="expandable-header" data-target="volume-settings-content">
                     Visualization &amp; Styling (Global) <span class="expand-arrow">&#x25B8;</span>
                 </div>
-                <div id="volume-settings-content" class="expandable-content">
-                    <div id="vol-controls-sidebar" style="padding: 4px; background: rgba(104, 178, 240, 0.1); border-radius: 4px; margin-bottom: 8px; display:none;">
-                        <label>Z-Depth (Layers): <span id="l-vd" class="value-label">40</span></label><input type="range" id="i-vd" min="10" max="100" value="40" step="1">
-                        <label>Point Base Size: <span id="l-psz" class="value-label">2.0</span></label><input type="range" id="i-psz" min="0.1" max="20.0" step="0.1" value="2.0">
-                        <label>Point Scale Factor: <span id="l-psc" class="value-label">3.5</span></label><input type="range" id="i-psc" min="0.0" max="10.0" step="0.1" value="3.5">
-                        <label>Point Falloff: <span id="l-pf" class="value-label">0.50</span></label><input type="range" id="i-pf" min="0.0" max="1.0" step="0.01" value="0.5">
-                        <div class="row">
-                            <input type="checkbox" id="cb-iso" checked style="width:auto; margin:0;"><label style="margin-left:4px;">Force Isotropic (Proper 3D)</label>
-                        </div>
-
-                        <h4 style="margin-top: 10px;">Visualization (Global)</h4>
-                        <div class="row"><label>Shading Mode</label><select id="vol-shade-select" style="width:100%;">
-                            <option value="SPECULAR">Default (Specular)</option>
-                            <option value="HEIGHT">Height-Based</option>
-                            <option value="VELOCITY">Velocity Gradient</option>
-                            <option value="ENERGY">Heatmap (Energy)</option>
-                            <option value="DIVERGENCE">Divergence (Red/Blue)</option>
-                            <option value="VECTOR_RGB">Vector RGB (Points only)</option>
-                        </select></div>
-                        <h4 style="border-bottom:none; margin-top: 5px;">Gradient Stops</h4>
-                        <div id="vol-gradient-stops"></div>
-                        <label>Grad. Bias: <span id="l-vol-gb" class="value-label">0.00</span></label><input type="range" id="i-vol-gb" min="-1.0" max="1.0" step="0.05" value="0.0">
-                        <label>Grad. Contrast: <span id="l-vol-gc" class="value-label">1.0</span></label><input type="range" id="i-vol-gc" min="0.1" max="5.0" step="0.1" value="1.0">
-                        <button id="btn-add-vol-stop" style="margin-top:4px;">+ Add Stop</button>
-                    </div>
+<div id="volume-settings-content" class="expandable-content">
+    <div id="vol-controls-sidebar" style="padding: 4px; background: rgba(104, 178, 240, 0.1); border-radius: 4px; margin-bottom: 8px; display:none;">
+        
+        <div class="row" style="margin-bottom: 8px; border-bottom: 1px solid #555; padding-bottom: 8px;">
+            <div style="display:flex; flex-direction:column; gap:4px; width:100%;">
+                <div class="row">
+                    <input type="checkbox" id="cb-additive" checked style="width:auto; margin:0;">
+                    <label for="cb-additive" style="margin-left:4px; color:#fff;">Additive (Glowing)</label>
+                    
+                    <input type="checkbox" id="cb-iso" checked style="width:auto; margin:0; margin-left: 10px;">
+                    <label for="cb-iso" style="margin-left:4px;">Isotropic</label>
                 </div>
+                <div class="row">
+                    <input type="checkbox" id="cb-mod-alpha" checked style="width:auto; margin:0;">
+                    <label for="cb-mod-alpha" style="margin-left:4px; color:#ddd;">Modulate Opacity (Hide Quiet)</label>
+                </div>
+            </div>
+        </div>
+
+        <label>Z-Depth (Layers): <span id="l-vd" class="value-label">40</span></label>
+        <input type="range" id="i-vd" min="10" max="100" value="40" step="1">
+        
+        <label>Point Base Size: <span id="l-psz" class="value-label">2.0</span></label>
+        <input type="range" id="i-psz" min="0.1" max="20.0" step="0.1" value="2.0">
+        
+        <label>Point Scale (Wave Amp): <span id="l-psc" class="value-label">3.5</span></label>
+        <input type="range" id="i-psc" min="0.0" max="10.0" step="0.1" value="3.5">
+        
+        <label>Point Falloff (Softness): <span id="l-pf" class="value-label">0.50</span></label>
+        <input type="range" id="i-pf" min="0.0" max="1.0" step="0.01" value="0.5">
+
+        <h4 style="margin-top: 10px;">Visualization (Global)</h4>
+        <div class="row"><label>Shading Mode</label><select id="vol-shade-select" style="width:100%;">
+            <option value="SPECULAR">Default (Specular)</option>
+            <option value="HEIGHT">Height-Based</option>
+            <option value="VELOCITY">Velocity Gradient</option>
+            <option value="ENERGY">Heatmap (Energy)</option>
+            <option value="DIVERGENCE">Divergence (Red/Blue)</option>
+            <option value="VECTOR_RGB">Vector RGB (Points only)</option>
+        </select></div>
+        
+        <h4 style="border-bottom:none; margin-top: 5px;">Gradient Stops</h4>
+        <div id="vol-gradient-stops"></div>
+        
+        <label>Grad. Bias: <span id="l-vol-gb" class="value-label">0.00</span></label>
+        <input type="range" id="i-vol-gb" min="-1.0" max="1.0" step="0.05" value="0.0">
+        
+        <label>Grad. Contrast: <span id="l-vol-gc" class="value-label">1.0</span></label>
+        <input type="range" id="i-vol-gc" min="0.1" max="5.0" step="0.1" value="1.0">
+        
+        <button id="btn-add-vol-stop" style="margin-top:4px;">+ Add Stop</button>
+    </div>
+</div>
             </div>
 
 
@@ -471,6 +498,8 @@ body.cinematic-mode #canvas-container {
     </div>
 
     <script>
+				var IS_ALPHA_MODULATION = true;
+				var IS_ADDITIVE_BLENDING = true; // Default to glowing
         var $ = id => document.getElementById(id);
         var EV = (id, t, fn) => { const el=$(id); if(el) el.addEventListener(t, fn); };
         
@@ -576,18 +605,30 @@ body.cinematic-mode #canvas-container {
         var PRESETS = {
              DEFAULT_WAVE: DEFAULT_STATE_CONFIG 
         }; 
-
-       var GLSL_SHADE_FUNC = `
+var GLSL_SHADE_FUNC = `
             uniform bool uIsPoints;
+            uniform bool uModulateAlpha;
             varying vec3 vNormal; uniform vec3 SUN_DIR; uniform float LIGHT_INTENSITY;
-            uniform int SHADING_MODE; varying float vWaveHeight; varying float vWaveVelocity; varying float vDensity;
+            varying vec3 vViewDir;
+						uniform int SHADING_MODE; varying float vWaveHeight; varying float vWaveVelocity; varying float vDensity;
             uniform float GRADIENT_BIAS; uniform float GRADIENT_CONTRAST;
             uniform vec3 GRADIENT_STOPS[8]; uniform int GRADIENT_STOPS_COUNT;
             uniform float VIS_MIN; uniform float VIS_MAX;
             uniform float uOpacity;
             uniform float uPointFalloff;
 
-            // Helper to get color maps
+            // --- VIBRANT PHASE PALETTE (SINEBOW) ---
+            // A mathematically perfect rainbow cycle for phase visualization.
+            // t = 0.0 to 1.0
+            vec3 spectral_phase(float t) {
+                // simple cosine palette that cycles RGB smoothly
+                vec3 a = vec3(0.5, 0.5, 0.5);
+                vec3 b = vec3(0.5, 0.5, 0.5);
+                vec3 c = vec3(1.0, 1.0, 1.0);
+                vec3 d = vec3(0.0, 0.333, 0.667); 
+                return a + b * cos(6.28318 * (c * t + d));
+            }
+
             vec3 heatmap(float value) {
                 value = clamp(value, 0.0, 1.0);
                 if (value < 0.3) return mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), value / 0.3);
@@ -605,26 +646,23 @@ body.cinematic-mode #canvas-container {
 
             vec4 calculateColor() {
                 float raw = 0.0;
-                raw = abs(vWaveHeight) * 0.2; 
                 
-                // --- MODE SELECTION ---
                 if (SHADING_MODE == 1) raw = abs(vWaveHeight) * 0.2; 
-                else if (SHADING_MODE == 2) {
-                    float v = vWaveVelocity * 2.0;
-                    raw = (v / (1.0 + abs(v))) * 0.5 + 0.5; 
-                }
+                else if (SHADING_MODE == 2) raw = (vWaveVelocity * 2.0 / (1.0 + abs(vWaveVelocity * 2.0))) * 0.5 + 0.5;
                 else if (SHADING_MODE == 3) raw = vWaveHeight * vWaveHeight * 0.02; 
-                
-                // Clip visibility range
-                if (raw < VIS_MIN || (raw > VIS_MAX && raw <= 1.0)) return vec4(0.0);
+                else raw = abs(vWaveHeight) * 0.2; 
+
+                float clipVal = (SHADING_MODE == 2) ? abs(raw - 0.5) * 2.0 : raw;
+                if (clipVal < VIS_MIN || (clipVal > VIS_MAX && clipVal <= 1.0)) return vec4(0.0);
 
                 vec3 col;
+                float energyEnvelope = 0.0;
                 
-                if (SHADING_MODE == 0) { // Default Specular
+                if (SHADING_MODE == 0) { // Specular
                     vec3 base = GRADIENT_STOPS[0]; 
                     float d = max(0.0, dot(vNormal, SUN_DIR)); 
                     vec3 R = reflect(-SUN_DIR, vNormal);
-                    float spec = pow(max(0.0, dot(R, normalize(vec3(1.0, 1.5, 1.0)))), 15.0); 
+                    float spec = pow(max(0.0, dot(R, normalize(vViewDir))), 15.0);
                     col = base * (vec3(0.4) + vec3(d) * LIGHT_INTENSITY) + vec3(1.0) * spec * LIGHT_INTENSITY; 
                 } 
                 else if (SHADING_MODE == 4) { // Divergence
@@ -632,78 +670,104 @@ body.cinematic-mode #canvas-container {
                     if (v < 0.0) col = mix(vec3(0.05), vec3(0.2, 0.5, 1.0), -v);
                     else col = mix(vec3(0.05), vec3(1.0, 0.3, 0.2), v);
                 } 
-                else if (SHADING_MODE == 5) { // VECTOR RGB (SCIENTIFIC)
-                    // RED = Amplitude (Displacement)
-                    // Normalized to 0..1 range (0.5 is zero displacement)
-                    float r = clamp(vWaveHeight * 0.2 + 0.5, 0.0, 1.0);
+                else if (SHADING_MODE == 5) { // ** FULL SPECTRUM PHASE **
                     
-                    // GREEN = Velocity (First Derivative wrt Time)
-                    // Normalized so 0.5 is zero velocity
-                    float g = clamp(vWaveVelocity * 1.5 + 0.5, 0.0, 1.0);
+                    // 1. Balance Inputs
+                    float h = vWaveHeight * 0.5; 
+                    float v = vWaveVelocity * 8.0; // 8.0 works well for standard DT
+
+                    // 2. Energy Envelope
+                    float energy = sqrt(h*h + v*v);
+                    energyEnvelope = energy;
+
+                    // 3. Phase Angle (0.0 to 1.0)
+                    float angle = atan(v, h); 
+                    float phase = angle / 6.28318 + 0.5; 
+
+                    // 4. Generate Spectrum
+                    // This function ensures we hit Red, Yellow, Green, Cyan, Blue, Magenta
+                    vec3 spectralColor = spectral_phase(phase);
                     
-                    // BLUE = Laplacian (Second Spatial Derivative / Curvature)
-                    // We approximate curvature using the surface normal's Y component or implicit height data
-                    // A flat surface has high Y normal (close to 1.0). Steep waves have low Y normal.
-                    // This creates a visualization of "Strain" or "Force".
-                    float curvature = clamp(1.0 - vNormal.y, 0.0, 1.0); 
-                    float b = curvature * 4.0; // Boost signal
+                    // 5. Apply Energy Brightness
+                    // We use a square root curve so even low energy waves have visible color
+                    float brightness = smoothstep(0.0, 1.0, sqrt(energy) * 1.5);
+                    col = spectralColor * brightness;
                     
-                    col = vec3(r, g, b);
+                    // 6. Highlight Peaks
+                    // Add a slight white tint to extremely high energy for contrast
+                    col += vec3(smoothstep(1.0, 3.0, energy) * 0.5);
                 } 
-                else { // Gradients/Heatmaps
+                else { // Gradients
                     vec3 map = (SHADING_MODE == 3) ? heatmap(clamp(raw,0.,1.)) : apply_gradient(raw);
                     float d = max(0.0, dot(vNormal, SUN_DIR));
                     col = map * (vec3(0.4) + d * LIGHT_INTENSITY * 0.8);
                 }
                 
-                // Density Damping Visual
-                col *= mix(1.0, 0.2, vDensity);
+                if (SHADING_MODE != 5) {
+                    col *= mix(1.0, 0.2, vDensity);
+                }
                 
-                return vec4(col, 0.9 * uOpacity);
+                // Opacity Logic
+                float finalAlpha = uOpacity;
+
+                if (uIsPoints && uModulateAlpha) {
+                    float magnitude = 0.0;
+                    if (SHADING_MODE == 5) magnitude = energyEnvelope;
+                    else if (SHADING_MODE == 2) magnitude = abs(vWaveVelocity) * 4.0; 
+                    else magnitude = abs(vWaveHeight) * 0.5;
+                    
+                    // Softer threshold to allow low-energy red waves to be visible
+                    float signalAlpha = smoothstep(0.005, 0.15, magnitude);
+                    finalAlpha *= signalAlpha;
+                }
+                
+                return vec4(col, finalAlpha);
             }
         `;
 const defaultFs = GLSL_SHADE_FUNC + `
-    void main() {
-        // 1. Get Base Color from the calculation function
+    uniform float uAlphaTest;
+		void main() {
+        // 1. Calculate Base Color
         vec4 c = calculateColor();
         
-        // 2. Handle Point Sprite Logic
+        // 2. Point Sprite Logic (Gaussian Splat)
         if (uIsPoints) {
-            // Coordinate from 0.0 to 1.0 relative to point center
+            // Get vector from center (0.0 to 0.5)
             vec2 coord = gl_PointCoord - vec2(0.5);
-            float dist2 = dot(coord, coord); // Distance squared (0 at center, 0.25 at edge)
-
-            // OPTIONAL: Hard circular clip to make it round immediately
-            if (dist2 > 0.25) discard;
-
-            // 3. Calculate Smoothness (Gaussian Splat)
-            // uPointFalloff: 0.0 = Hard Edge, 1.0 = Soft Gaussian
-            // We map falloff to a sharpness factor. 
-            // Low falloff -> High sharpness (exponent is high)
-            float softness = uPointFalloff;
-            float exponent = 2.0 + (1.0 - softness) * 20.0; 
             
-            // Gaussian function: e^(-x^2 * sharpness)
-            // We multiply dist2 by 4.0 to normalize the 0.25 radius to 1.0 range for the math
-            float alpha = exp(-(dist2 * 4.0) * exponent);
+            // Calculate radius (0.0 at center, 1.0 at edge of sprite)
+            float r = length(coord) * 2.0;
+            
+            // OPTIONAL: Strict circle clip (removes square corners)
+            if (r > 1.0) discard;
 
-            // 4. Apply to Alpha Channel
-            c.a *= alpha;
-        } 
-        else {
-            // Standard Mesh handling (non-points)
-            // Just discard corners if we want meshes to look "wire-ish" or standard logic
-            // But usually we leave meshes solid.
+            // Map "uPointFalloff" (0.0 to 1.0) to a Sharpness value.
+            // 0.0 (Hard) -> Sharpness 0.0 (Flat disc)
+            // 1.0 (Soft) -> Sharpness 10.0 (Tight Gaussian)
+            // We clamp minimum sharpness to ensure edges always fade slightly
+            float sharpness = 2.0 + (uPointFalloff * 10.0);
+            
+            // Gaussian Formula: e^(-r^2 * sharpness)
+            // This creates the bell curve 
+
+            float g = exp(- (r * r) * sharpness);
+            
+            // If we want a hard edge (Falloff ~ 0), we boost the curve to be a plateau
+						if (uAlphaTest > 0.1) {
+                 sharpness = 10.0; 
+                 g = smoothstep(1.0, 0.5, r); 
+            }
+
+            // Apply Gaussian to Alpha
+            c.a *= g;
         }
 
-        // 5. Final Cleanup
-        // Discard almost invisible pixels to save fill-rate/blending issues
-        if (c.a < 0.01) discard;
+        // 3. Final Discard to prevent invisible overdraw
+				if (c.a < uAlphaTest) discard;
         
         gl_FragColor = c;
     }
 `;
-
 
         var selectedEmitterId = null; 
         var stampPreviewMesh = null;
@@ -1330,91 +1394,109 @@ function removeLayer() {
             });
         }
 
-        function syncM() {
-            meshes.forEach(m=>scene.remove(m)); meshes = [];
-            var volOpacity = parseFloat($('i-vo').value);
-            
-            const vizCfg = BASE_LAYER_CFG;
-            
-            layers.forEach((l, i) => {
-                var g = new THREE.PlaneGeometry(50, 50, GRID-1, GRID-1).rotateX(-Math.PI/2);
-                
-                const source = IS_3D_MODE ? vizCfg : l;
-                const stops = IS_3D_MODE ? source.volGradientStops : source.gradientStops;
-                
-                var cols = [];
-                for (let j=0; j<MAX_GRADIENT_STOPS; j++) {
-                    let c = stops[Math.min(j, stops.length-1)];
-                    cols.push(new THREE.Color(c[0]/255, c[1]/255, c[2]/255));
-                }
-                var uforms = { 
-                    SUN_DIR:{value:sunDir}, LIGHT_INTENSITY:{value:lInt}, TIME:{value:0}, 
-                    SHADING_MODE: {value: ['SPECULAR', 'HEIGHT', 'VELOCITY', 'ENERGY', 'DIVERGENCE', 'VECTOR_RGB'].indexOf(IS_3D_MODE ? source.volShadingMode : source.shadingMode)},
-                    GRADIENT_BIAS: {value: IS_3D_MODE ? source.volGradientBias : source.gradientBias}, 
-                    GRADIENT_CONTRAST: {value: IS_3D_MODE ? source.volGradientContrast : source.gradientContrast},
-                    GRADIENT_STOPS: {value: uniformsArray(cols)}, 
-                    GRADIENT_STOPS_COUNT: {value: stops.length},
-                    VIS_MIN: {value: visMin}, VIS_MAX: {value: visMax},
-                    uIsPoints: {value: l.visMode === 'POINTS'},
-                    uPointSize: {value: l.pointSize},
-                    uIs3D: {value: IS_3D_MODE},
-                    uPointScaleFactor: {value: l.pointScaleFactor},
-                    uPointFalloff: {value: l.pointFalloff},
-                    uOpacity: {value: volOpacity},
-                    uIs3DPoints: {value: IS_3D_MODE && l.visMode === 'POINTS'} 
-                };
-                
-                g.setAttribute('waveHeight', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count), 1));
-                g.setAttribute('waveVelocity', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count), 1));
-                g.setAttribute('aDensity', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count), 1));
-                
-                var blending = (IS_3D_MODE && l.visMode === 'POINTS') ? THREE.AdditiveBlending : THREE.NormalBlending;
-                var depthWrite = !IS_3D_MODE;
-                
-                var m = new THREE.ShaderMaterial({
-                    uniforms: uforms,
-                    vertexShader: `
-                        varying vec3 vNormal; attribute float waveHeight; attribute float waveVelocity; attribute float aDensity; 
-                        varying float vWaveHeight; varying float vWaveVelocity; varying float vDensity; 
-                        uniform bool uIsPoints; uniform float uPointSize; uniform bool uIs3D; uniform float uPointScaleFactor;
-                        uniform bool uIs3DPoints;
-                        void main(){ 
-                            vNormal=normalize(normalMatrix*normal); 
-                            vWaveHeight=waveHeight; vWaveVelocity=waveVelocity; vDensity=aDensity; 
-                            
-                            vec4 position_offset = vec4(position, 1.0);
-                            
-                            if (!uIs3DPoints) { 
-                                position_offset.y += waveHeight * 2.0 * ${ZSC*0.05}; 
-                            }
-                            
-                            vec4 mvPosition = modelViewMatrix*position_offset;
-                            gl_Position=projectionMatrix*mvPosition;
-                            
-                            if (uIsPoints) {
-                                float amp = smoothstep(0.0, 1.0, abs(waveHeight));
-                                float base = uIs3D ? 4.0 : 5.0;
-                                gl_PointSize = uPointSize * (1.0 + amp * uPointScaleFactor); 
-                                gl_PointSize *= (300.0 / -mvPosition.z); 
-                            }
-                        }`,
-                    fragmentShader: defaultFs, transparent: true, side: 2,
-                    blending: blending, depthWrite: depthWrite
-                });
+function syncM() {
+    meshes.forEach(m => scene.remove(m));
+    meshes = [];
+    var volOpacity = parseFloat($('i-vo').value);
 
-                let mesh;
-                if (l.visMode === 'MESH' && !IS_3D_MODE) {
-                     mesh = new THREE.Mesh(g, m);
-                } else {
-                     mesh = new THREE.Points(g, m);
-                }
-                mesh.userData = {lid:l.id, idx:i, visMode: l.visMode};
-                
-                scene.add(mesh); meshes.push(mesh);
-            });
-            updTr(); syncE();
+    const vizCfg = BASE_LAYER_CFG;
+
+    layers.forEach((l, i) => {
+        var g = new THREE.PlaneGeometry(50, 50, GRID - 1, GRID - 1).rotateX(-Math.PI / 2);
+
+        const source = IS_3D_MODE ? vizCfg : l;
+        const stops = IS_3D_MODE ? source.volGradientStops : source.gradientStops;
+
+        var cols = [];
+        for (let j = 0; j < MAX_GRADIENT_STOPS; j++) {
+            let c = stops[Math.min(j, stops.length - 1)];
+            cols.push(new THREE.Color(c[0] / 255, c[1] / 255, c[2] / 255));
         }
+				var isAdditive = IS_ADDITIVE_BLENDING;
+				var alphaTestVal = isAdditive ? 0.01 : 0.5;
+				var depthWriteVal = !isAdditive;
+        var uforms = {
+            SUN_DIR: { value: sunDir },
+            LIGHT_INTENSITY: { value: lInt },
+            TIME: { value: 0 },
+            SHADING_MODE: { value: ['SPECULAR', 'HEIGHT', 'VELOCITY', 'ENERGY', 'DIVERGENCE', 'VECTOR_RGB'].indexOf(IS_3D_MODE ? source.volShadingMode : source.shadingMode) },
+            GRADIENT_BIAS: { value: IS_3D_MODE ? source.volGradientBias : source.gradientBias },
+            GRADIENT_CONTRAST: { value: IS_3D_MODE ? source.volGradientContrast : source.gradientContrast },
+            GRADIENT_STOPS: { value: uniformsArray(cols) },
+            GRADIENT_STOPS_COUNT: { value: stops.length },
+            VIS_MIN: { value: visMin },
+            VIS_MAX: { value: visMax },
+            uIsPoints: { value: l.visMode === 'POINTS' },
+            uPointSize: { value: l.pointSize },
+            uIs3D: { value: IS_3D_MODE },
+            uPointScaleFactor: { value: l.pointScaleFactor },
+            uPointFalloff: { value: l.pointFalloff },
+            uOpacity: { value: volOpacity },
+						uModulateAlpha: {value: IS_ALPHA_MODULATION},
+            uIs3DPoints: { value: IS_3D_MODE && l.visMode === 'POINTS' },
+						uAlphaTest: { value: alphaTestVal }
+        };
 
+        g.setAttribute('waveHeight', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count), 1));
+        g.setAttribute('waveVelocity', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count), 1));
+        g.setAttribute('aDensity', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count), 1));
+
+				var isPoints = (l.visMode === 'POINTS');
+				var blending = THREE.NormalBlending;
+				if (isPoints && IS_ADDITIVE_BLENDING) {
+    			blending = THREE.AdditiveBlending;
+				}
+        var m = new THREE.ShaderMaterial({
+            uniforms: uforms,
+            vertexShader: `
+                varying vec3 vNormal; attribute float waveHeight; attribute float waveVelocity; attribute float aDensity; 
+                varying float vWaveHeight; varying float vWaveVelocity; varying float vDensity; 
+                varying vec3 vViewDir;
+								uniform bool uIsPoints; uniform float uPointSize; uniform bool uIs3D; uniform float uPointScaleFactor;
+                uniform bool uIs3DPoints;
+                void main(){
+										vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+                    vNormal=normalize(mat3(modelMatrix)*normal);
+                    vWaveHeight=waveHeight; vWaveVelocity=waveVelocity; vDensity=aDensity; 
+                    
+                    vec4 position_offset = vec4(position, 1.0);
+                    vViewDir = normalize(cameraPosition - worldPosition.xyz);
+                    if (!uIs3DPoints) { 
+                        position_offset.y += waveHeight * 2.0 * ${ZSC * 0.05}; 
+                    }
+                    
+                    vec4 mvPosition = modelViewMatrix*position_offset;
+                    gl_Position=projectionMatrix*mvPosition;
+                    
+                    if (uIsPoints) {
+                        float amp = smoothstep(0.0, 1.0, abs(waveHeight));
+                        float base = uIs3D ? 4.0 : 5.0;
+                        gl_PointSize = uPointSize * (1.0 + amp * uPointScaleFactor); 
+                        gl_PointSize *= (300.0 / -mvPosition.z); 
+                    }
+                }`,
+            fragmentShader: defaultFs,
+            transparent: true,
+            side: 2,
+						blending: isAdditive ? THREE.AdditiveBlending : THREE.NormalBlending,
+            depthWrite: depthWriteVal,
+						depthTest: true,
+        });
+
+        let mesh;
+        if (l.visMode === 'MESH' && !IS_3D_MODE) {
+            mesh = new THREE.Mesh(g, m);
+        } else {
+            mesh = new THREE.Points(g, m);
+        }
+        mesh.userData = { lid: l.id, idx: i, visMode: l.visMode };
+
+        scene.add(mesh);
+        meshes.push(mesh);
+    });
+    updTr();
+    syncE();
+}
         function syncE() {
             emitMeshes.forEach(m=>scene.remove(m)); emitMeshes = [];
             emits.forEach(e => {
@@ -2860,7 +2942,28 @@ function initData() {
                     }
                 };
             }
-            
+            // Additive Blending Toggle
+const cbAdd = $('cb-additive');
+if (cbAdd) {
+    cbAdd.onchange = (e) => {
+        IS_ADDITIVE_BLENDING = e.target.checked;
+        syncM(); // Recreate materials with new blending mode
+    };
+}
+
+// Ensure the variable matches the checkbox on load
+if (cbAdd) IS_ADDITIVE_BLENDING = cbAdd.checked;
+
+					// Modulate Alpha Toggle
+            const cbModAlpha = $('cb-mod-alpha');
+            if (cbModAlpha) {
+                cbModAlpha.onchange = (e) => {
+                    IS_ALPHA_MODULATION = e.target.checked;
+                    syncM();
+                };
+                // Ensure variable matches checkbox on init
+                IS_ALPHA_MODULATION = cbModAlpha.checked;
+            }
             const iPsz = $('i-psz');
             const lPsz = $('l-psz');
             if (iPsz && lPsz) {
