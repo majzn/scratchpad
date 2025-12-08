@@ -2773,7 +2773,7 @@
 							}
 
 							if (VISCOSITY > 0) val -= (val - U_CURR) * VISCOSITY;
-
+							val = Math.max(-10.0, Math.min(10.0, val));
 							u_next_arr[ptr] = val;
 						}
 					}
