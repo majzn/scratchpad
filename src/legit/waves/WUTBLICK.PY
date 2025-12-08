@@ -4,14 +4,14 @@ import argparse
 import traceback
 
 # --- ARGUMENT PARSING ---
-parser = argparse.ArgumentParser(description="Wutblick Engine - Advanced HTML/WebGL Renderer")
+parser = argparse.ArgumentParser(description="Wutblick Engine")
 parser.add_argument("file", nargs="?", default=None, help="HTML file to load")
-parser.add_argument("--clean", action="store_true", help="Start in distraction-free mode (no UI)")
-parser.add_argument("--geometry", type=str, help="Window geometry (e.g., 1280x720)", default="1280x800")
+parser.add_argument("--clean", action="store_true", help="Start in distraction-free mode")
+parser.add_argument("--geometry", type=str, help="Window geometry", default="1280x800")
 parser.add_argument("--fullscreen", action="store_true", help="Start in fullscreen mode")
 parser.add_argument("--maximized", action="store_true", help="Start maximized")
-parser.add_argument("--debug-port", type=str, help="Enable remote debugging on specified port", default=None)
-parser.add_argument("--zoom", type=float, help="Initial zoom factor (e.g., 1.5)", default=1.0)
+parser.add_argument("--debug-port", type=str, help="Enable remote debugging", default=None)
+parser.add_argument("--zoom", type=float, help="Initial zoom factor", default=1.0)
 parser.add_argument("--no-patch", action="store_true", help="Disable automatic shader patching")
 args, unknown = parser.parse_known_args()
 
@@ -272,7 +272,6 @@ class CodeEditor(QPlainTextEdit):
                 break
                 
             if not is_folding:
-                # If un-folding, preserve existing sub-folds
                 if next_block.blockNumber() in self.folded_blocks:
                     next_block.setVisible(True)
                     sub_indent = self.get_indentation(next_block.text())
@@ -641,7 +640,7 @@ class SettingsDialog(QDialog):
             self.font_size_spin.setValue(font.pointSize())
 
 class NativeBrowser(QMainWindow):
-    def __init__(self, initial_file=None, clean_mode=False, geometry=None, fullscreen=False, maximized=False, zoom=1.0, no_patch=False):
+    def __init__(self, initial_file=None, initial_content=None, clean_mode=False, geometry=None, fullscreen=False, maximized=False, zoom=1.0, no_patch=False):
         super().__init__()
         
         self.settings = {
@@ -666,7 +665,6 @@ class NativeBrowser(QMainWindow):
 
         self.setWindowTitle("Wutblick Engine")
         
-        # Apply Geometry/State
         if geometry:
             try:
                 w, h = map(int, geometry.lower().split('x'))
@@ -689,7 +687,6 @@ class NativeBrowser(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # 1. SETUP MENU BAR (LOGICAL DROPDOWNS)
         self.setup_menus()
 
         self.splitter = QSplitter(Qt.Horizontal)
@@ -742,14 +739,19 @@ class NativeBrowser(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         
-        # Zoom Label in Status Bar
         self.zoom_label = QLabel("Zoom: 100%")
         self.zoom_label.setStyleSheet("padding: 0 10px; color: #38bdf8; font-weight: bold;")
         self.status_bar.addPermanentWidget(self.zoom_label)
         
         self.update_status()
 
-        if initial_file and os.path.exists(initial_file):
+        if initial_content:
+            self.editor.setPlainText(initial_content)
+            self.current_file = None
+            self.is_modified = False
+            self.update_title()
+            self.render_content()
+        elif initial_file and os.path.exists(initial_file):
             self.load_file(initial_file)
 
         self.apply_settings()
@@ -762,7 +764,6 @@ class NativeBrowser(QMainWindow):
     def setup_menus(self):
         mb = self.menuBar()
         
-        # FILE MENU
         file_menu = mb.addMenu("File")
         a_open = QAction("Open...", self)
         a_open.setShortcut("Ctrl+O")
@@ -791,7 +792,6 @@ class NativeBrowser(QMainWindow):
         a_exit.triggered.connect(self.close)
         file_menu.addAction(a_exit)
 
-        # EDIT MENU
         edit_menu = mb.addMenu("Edit")
         a_undo = QAction("Undo", self)
         a_undo.setShortcut("Ctrl+Z")
@@ -821,7 +821,6 @@ class NativeBrowser(QMainWindow):
         a_settings.triggered.connect(self.show_settings)
         edit_menu.addAction(a_settings)
 
-        # CODE MENU
         code_menu = mb.addMenu("Code")
         a_fold = QAction("Collapse All", self)
         a_fold.setShortcut("Ctrl+Shift+Up")
@@ -839,7 +838,6 @@ class NativeBrowser(QMainWindow):
         a_wrap.triggered.connect(self.toggle_wrap)
         code_menu.addAction(a_wrap)
 
-        # VIEW MENU
         view_menu = mb.addMenu("View")
         a_render = QAction("Render", self)
         a_render.setShortcut("F5")
@@ -875,7 +873,6 @@ class NativeBrowser(QMainWindow):
         a_focus.triggered.connect(self.toggle_cinematic)
         view_menu.addAction(a_focus)
 
-        # TOOLS MENU
         tools_menu = mb.addMenu("Tools")
         a_ui = QAction("UI Editor", self)
         a_ui.setShortcut("F6")
@@ -938,7 +935,6 @@ class NativeBrowser(QMainWindow):
         self.editor.setTabStopDistance(self.editor.fontMetrics().width(' ') * self.settings["tab_width"])
         self.auto_render_timer.setInterval(self.settings["auto_run_delay"])
         
-        # Apply Zoom
         self.web_view.setZoomFactor(self.settings["zoom_factor"])
         self.update_zoom_label()
 
@@ -1053,10 +1049,9 @@ class NativeBrowser(QMainWindow):
             if ans == QMessageBox.Yes:
                 self.save_file()
         
-        # FAST CLEANUP
         self.auto_render_timer.stop()
         self.web_view.stop()
-        self.web_view.setPage(None) # Detach page to force kill background processes
+        self.web_view.setPage(None)
         event.accept()
 
 if __name__ == "__main__":
@@ -1064,14 +1059,14 @@ if __name__ == "__main__":
         QApplication.setAttribute(Qt.AA_UseDesktopOpenGL)
         QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
         
-        # Build Flags based on Args
         flags = [
             "--no-sandbox",
             "--disable-web-security",
             "--ignore-gpu-blacklist",
             "--enable-gpu-rasterization",
             "--enable-webgl-developer-extensions",
-            "--enable-webgl-draft-extensions"
+            "--enable-webgl-draft-extensions",
+            "--disable-gpu-shader-disk-cache"
         ]
         if args.debug_port:
             flags.append(f"--remote-debugging-port={args.debug_port}")
@@ -1082,10 +1077,38 @@ if __name__ == "__main__":
         os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
         
         app.setStyleSheet(DARK_THEME)
+
+        target_file = args.file
+        target_content = None
         
+        if target_file is None:
+            # ROBUST SCANNING LOGIC
+            # If running as compiled exe, sys._MEIPASS exists.
+            # If running as script, use current directory.
+            if hasattr(sys, '_MEIPASS'):
+                base_dir = sys._MEIPASS
+                print(f"Scanning internal bundle directory: {base_dir}")
+            else:
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                print(f"Scanning local directory: {base_dir}")
+
+            # Scan for any HTML file in the base directory
+            for f in os.listdir(base_dir):
+                if f.lower().endswith('.html'):
+                    full_path = os.path.join(base_dir, f)
+                    try:
+                        print(f"Found candidate file: {full_path}")
+                        with open(full_path, 'r', encoding='utf-8') as file_obj:
+                            target_content = file_obj.read()
+                        print("Loaded file content successfully.")
+                        break # Stop after finding the first HTML file
+                    except Exception as e:
+                        print(f"Error reading {f}: {e}")
+
         print(f"Starting Wutblick Engine (Clean Mode: {args.clean}, Patch: {not args.no_patch})...")
         window = NativeBrowser(
-            initial_file=args.file, 
+            initial_file=target_file if not target_content else None,
+            initial_content=target_content,
             clean_mode=args.clean,
             geometry=args.geometry,
             fullscreen=args.fullscreen,

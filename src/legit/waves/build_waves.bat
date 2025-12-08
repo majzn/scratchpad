@@ -1,0 +1,1 @@
+pyinstaller --noconfirm --onefile --add-data "waves.html;." --name "wb_waves" WUTBLICK.PY
