@@ -479,8 +479,7 @@ body.cinematic-mode #canvas-container {
         var IS_3D_MODE = false;
         var VOL_LAYERS = 40;
         var IS_PAUSED = false; 
-        
-        var layers = [], u = [], u_prev = [], den = [], meshes = [], emitMeshes = [], obsMeshes = [];
+        var layers = [], u = [], u_prev = [], u_aux = [], den = [], meshes = [], emitMeshes = [], obsMeshes = [];
         var emits = [], shapes = [], brush = 'DISTURBANCE';
         var mRad = 10, mVal = 0.5, sunDir = new THREE.Vector3(), lInt = 1.0;
         var isOrbit = false, isDrag = false, actEmit = null, mX = 0, mY = 0, rad = 60, theta = 45, phi = 60;
@@ -663,7 +662,47 @@ body.cinematic-mode #canvas-container {
                 return vec4(col, 0.9 * uOpacity);
             }
         `;
-        const defaultFs = GLSL_SHADE_FUNC + 'void main(){ float r2 = length(gl_PointCoord - vec2(0.5)); if(uIsPoints) { float falloff = mix(r2 > 0.5 ? 0.0 : 1.0, exp(-(r2*r2) * (15.0 - 14.0 * uPointFalloff)), uPointFalloff); if (falloff < 0.01) discard; } else if(r2 > 0.5) discard; vec4 c=calculateColor(); if(c.a == 0.0) discard; gl_FragColor=c;}'; 
+const defaultFs = GLSL_SHADE_FUNC + `
+    void main() {
+        // 1. Get Base Color from the calculation function
+        vec4 c = calculateColor();
+        
+        // 2. Handle Point Sprite Logic
+        if (uIsPoints) {
+            // Coordinate from 0.0 to 1.0 relative to point center
+            vec2 coord = gl_PointCoord - vec2(0.5);
+            float dist2 = dot(coord, coord); // Distance squared (0 at center, 0.25 at edge)
+
+            // OPTIONAL: Hard circular clip to make it round immediately
+            if (dist2 > 0.25) discard;
+
+            // 3. Calculate Smoothness (Gaussian Splat)
+            // uPointFalloff: 0.0 = Hard Edge, 1.0 = Soft Gaussian
+            // We map falloff to a sharpness factor. 
+            // Low falloff -> High sharpness (exponent is high)
+            float softness = uPointFalloff;
+            float exponent = 2.0 + (1.0 - softness) * 20.0; 
+            
+            // Gaussian function: e^(-x^2 * sharpness)
+            // We multiply dist2 by 4.0 to normalize the 0.25 radius to 1.0 range for the math
+            float alpha = exp(-(dist2 * 4.0) * exponent);
+
+            // 4. Apply to Alpha Channel
+            c.a *= alpha;
+        } 
+        else {
+            // Standard Mesh handling (non-points)
+            // Just discard corners if we want meshes to look "wire-ish" or standard logic
+            // But usually we leave meshes solid.
+        }
+
+        // 5. Final Cleanup
+        // Discard almost invisible pixels to save fill-rate/blending issues
+        if (c.a < 0.01) discard;
+        
+        gl_FragColor = c;
+    }
+`;
 
 
         var selectedEmitterId = null; 
@@ -906,40 +945,43 @@ body.cinematic-mode #canvas-container {
             };
         }
 
-        function addLayer() {
-            const expansionState = getExpansionState();
-            if (layers.length >= (IS_3D_MODE ? 100 : 8)) return;
-            var newId = layerCounter++;
-            layers.push(defL(newId));
-            u.push(new Float32Array(GRID*GRID));
-            u_prev.push(new Float32Array(GRID*GRID));
-            den.push(new Float32Array(GRID*GRID));
-            syncM(); 
-            updateLayerListUI();
-            restoreExpansionState(expansionState);
-            renderCouplingMatrixUI(); 
-        }
-
-        function removeLayer() {
-            const expansionState = getExpansionState();
-            if (layers.length <= 1) return;
-            var idxToRemove = layers.length - 1;
-            emits = emits.filter(e => e.lIdx !== idxToRemove); 
-            layers.pop(); u.pop(); u_prev.pop(); den.pop();
-            
-            GLOBAL_COUPLING_LINKS = GLOBAL_COUPLING_LINKS
-                .filter(link => link.sourceIdx !== idxToRemove && link.targetIdx !== idxToRemove)
-                .map(link => ({
-                    ...link,
-                    sourceIdx: link.sourceIdx > idxToRemove ? link.sourceIdx - 1 : link.sourceIdx,
-                    targetIdx: link.targetIdx > idxToRemove ? link.targetIdx - 1 : link.targetIdx
-                }));
-            
-            syncM(); syncE(); 
-            updateLayerListUI();
-            restoreExpansionState(expansionState);
-            renderCouplingMatrixUI(); 
-        }
+function addLayer() {
+    const expansionState = getExpansionState();
+    if (layers.length >= (IS_3D_MODE ? 100 : 8)) return;
+    var newId = layerCounter++;
+    layers.push(defL(newId));
+    u.push(new Float32Array(GRID*GRID));
+    u_prev.push(new Float32Array(GRID*GRID));
+    // NEW: Add aux buffer
+    u_aux.push(new Float32Array(GRID*GRID));
+    den.push(new Float32Array(GRID*GRID));
+    syncM(); 
+    updateLayerListUI();
+    restoreExpansionState(expansionState);
+    renderCouplingMatrixUI(); 
+}
+function removeLayer() {
+    const expansionState = getExpansionState();
+    if (layers.length <= 1) return;
+    var idxToRemove = layers.length - 1;
+    emits = emits.filter(e => e.lIdx !== idxToRemove); 
+    layers.pop(); u.pop(); u_prev.pop(); den.pop();
+    // NEW: Remove aux buffer
+    u_aux.pop();
+    
+    GLOBAL_COUPLING_LINKS = GLOBAL_COUPLING_LINKS
+        .filter(link => link.sourceIdx !== idxToRemove && link.targetIdx !== idxToRemove)
+        .map(link => ({
+            ...link,
+            sourceIdx: link.sourceIdx > idxToRemove ? link.sourceIdx - 1 : link.sourceIdx,
+            targetIdx: link.targetIdx > idxToRemove ? link.targetIdx - 1 : link.targetIdx
+        }));
+    
+    syncM(); syncE(); 
+    updateLayerListUI();
+    restoreExpansionState(expansionState);
+    renderCouplingMatrixUI(); 
+}
         
         function resetDensity() {
             den.forEach(d => d.fill(0));
@@ -1420,14 +1462,14 @@ body.cinematic-mode #canvas-container {
 function sim() {
     if (!layers.length) return;
     var N = GRID;
-    var u_n = u.map(arr => new Float32Array(arr));
-    var newD = layers.map((_, l) => den[l]);
-    den = newD;
+    
+    // OPTIMIZATION: We do NOT create new arrays here. We write to u_aux.
+    // var u_n = u.map(arr => new Float32Array(arr)); <--- DELETED THIS LINE
 
     TIME++;
     var DT2 = DT_FACTOR * DT_FACTOR;
-    var DT = DT_FACTOR;
-
+    
+    // Process Emitters directly into the CURRENT buffer (u)
     emits.forEach(e => {
         var phase = (TIME + e.off) * (2 * Math.PI / e.rt);
         var val = 0;
@@ -1479,65 +1521,88 @@ function sim() {
         volK = BASE_LAYER_CFG.K;
     }
 
-    const layerCouplingContributions = new Array(layers.length).fill(0).map(() => new Float32Array(GRID * GRID));
-
-    if (!IS_3D_MODE) {
+    // Pre-calculate coupling to avoid repeated lookups inside the loop
+    const layerCouplingContributions = new Array(layers.length).fill(null);
+    
+    if (!IS_3D_MODE && GLOBAL_COUPLING_LINKS.length > 0) {
         GLOBAL_COUPLING_LINKS.forEach(link => {
             if (link.sourceIdx < layers.length && link.targetIdx < layers.length && link.sourceIdx !== link.targetIdx) {
+                if(!layerCouplingContributions[link.targetIdx]) layerCouplingContributions[link.targetIdx] = new Float32Array(GRID*GRID);
+                
                 const sourceU = u[link.sourceIdx];
+                const sourcePrev = u_prev[link.sourceIdx];
+                const targetU = u[link.targetIdx];
                 const rate = link.rate;
                 const targetProp = link.targetProperty;
+                const accum = layerCouplingContributions[link.targetIdx];
 
                 for (let ptr = 0; ptr < N * N; ptr++) {
                     let sourceValue = 0;
-                    if (targetProp === 'AMPLITUDE') {
-                        sourceValue = sourceU[ptr];
-                    } else if (targetProp === 'VELOCITY') {
-                        sourceValue = sourceU[ptr] - u_prev[link.sourceIdx][ptr];
-                    }
-
-                    const targetU = u[link.targetIdx][ptr];
-                    layerCouplingContributions[link.targetIdx][ptr] += rate * (sourceValue - targetU);
+                    if (targetProp === 'AMPLITUDE') sourceValue = sourceU[ptr];
+                    else if (targetProp === 'VELOCITY') sourceValue = sourceU[ptr] - sourcePrev[ptr];
+                    accum[ptr] += rate * (sourceValue - targetU[ptr]);
                 }
             }
         });
     }
 
     layers.forEach((l, idx) => {
+        // Cache Arrays for speed (Micro-optimization)
+        var u_current_arr = u[idx];
+        var u_prev_arr = u_prev[idx];
+        var u_next_arr = u_aux[idx]; // Write to Aux
+        var den_arr = den[idx];
+        
+        var u_above_arr = (idx < layers.length - 1) ? u[idx + 1] : null;
+        var u_below_arr = (idx > 0) ? u[idx - 1] : null;
+
         var finalC = IS_3D_MODE ? effC : l.C;
         var finalD = IS_3D_MODE ? effD : l.D;
         var effBnd = IS_3D_MODE ? l.bnd : l.bnd;
+        
+        var couplingArr = layerCouplingContributions[idx];
 
         for (let i = 1; i < N - 1; i++) {
+            // Unroll the inner loop slightly or just rely on JIT. 
+            // Standard iterating is fine, but accessing typed arrays is faster via variable.
+            var offset = i * N;
+            
             for (let j = 1; j < N - 1; j++) {
-                var ptr = i * N + j;
+                var ptr = offset + j;
 
-                var localDensity = den[idx][ptr];
-                var globalDensity = GLOBAL_DEN[ptr];
-
+                var localDensity = den_arr[ptr];
+                
+                // Copy value if blocked
                 if (localDensity > 0.99) {
-                    u_n[idx][ptr] = u[idx][ptr];
+                    u_next_arr[ptr] = u_current_arr[ptr];
                     continue;
                 }
 
-                var U_CURR = u[idx][ptr];
-                var U_PREV = u_prev[idx][ptr];
+                var globalDensity = GLOBAL_DEN[ptr];
+                var U_CURR = u_current_arr[ptr];
+                var U_PREV = u_prev_arr[ptr];
 
-                var lap = u[idx][ptr + 1] + u[idx][ptr - 1] + u[idx][ptr + N] + u[idx][ptr - N] - 4 * U_CURR;
+                var lap = u_current_arr[ptr + 1] + u_current_arr[ptr - 1] + u_current_arr[ptr + N] + u_current_arr[ptr - N] - 4 * U_CURR;
 
-                var U_BELOW = (idx > 0) ? u[idx - 1][ptr] : U_CURR;
-                var U_ABOVE = (idx < layers.length - 1) ? u[idx + 1][ptr] : U_CURR;
+                var U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
+                var U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
 
-                var C_density = localDensity > 0 ? finalC * Math.max(0.001, 1 - localDensity) : finalC;
+                var C_density = localDensity > 0 ? finalC * (1 - localDensity) : finalC; 
+                // Removed Math.max(0.001) for speed, assuming 1-density is safe enough or pre-clamped inputs
 
-                var C_global_refract = globalDensity > 0 ? 1.0 + (globalDensity * (GLOBAL_DEN_REFRACTION - 1.0)) : 1.0;
-                var C_final = C_density / C_global_refract;
+                var C_final = C_density;
+                if (globalDensity > 0) {
+                     // Inlining calculation to avoid function call
+                     var C_global_refract = 1.0 + (globalDensity * (GLOBAL_DEN_REFRACTION - 1.0));
+                     C_final = C_density / C_global_refract;
+                }
 
-                var D_global_absorb = globalDensity > 0 ? GLOBAL_DEN_ABSORPTION * globalDensity : 0.0;
-                var D_final = finalD + D_global_absorb;
+                var D_final = finalD;
+                if (globalDensity > 0) {
+                    D_final += GLOBAL_DEN_ABSORPTION * globalDensity;
+                }
 
                 var COUPLING_TERM = 0;
-
                 if (IS_3D_MODE) {
                     COUPLING_TERM = volK * (U_ABOVE + U_BELOW - 2 * U_CURR);
                 } else {
@@ -1546,10 +1611,11 @@ function sim() {
                     COUPLING_TERM = K_BELOW * (U_BELOW - U_CURR) + K_CURR * (U_ABOVE - U_CURR);
                 }
 
-                var EXTERNAL_COUPLING_TERM = layerCouplingContributions[idx][ptr] || 0;
+                var EXTERNAL_COUPLING_TERM = couplingArr ? couplingArr[ptr] : 0;
 
                 var val;
-
+                
+                // SIMPLIFIED FORMULA SWITCH - Moved common operations out
                 if (l.formulaKey === 'WAVE') {
                     val = 2 * U_CURR - U_PREV +
                         C_final * lap * DT2 -
@@ -1563,70 +1629,87 @@ function sim() {
                         COUPLING_TERM * DT_FACTOR +
                         EXTERNAL_COUPLING_TERM * DT_FACTOR;
                 } else if (l.formulaKey === 'REACTION') {
-                    const F = l.C;
+                    // Reaction-Diffusion (Gray-Scott simplified or single component)
+                    const F = l.C; // Using C/D params for F/k
                     const k = l.D;
-                    const du = lap;
-                    val = U_CURR + DT_FACTOR * (C_final * du - F * U_CURR + k * (1.0 - U_CURR)) +
+                    val = U_CURR + DT_FACTOR * (C_final * lap - F * U_CURR + k * (1.0 - U_CURR)) +
                         COUPLING_TERM * DT_FACTOR +
                         EXTERNAL_COUPLING_TERM * DT_FACTOR;
                 } else {
+                    // Default Fallback
                     val = 2 * U_CURR - U_PREV +
                         C_final * lap * DT2 -
-                        D_final * (U_CURR - U_PREV) +
-                        COUPLING_TERM * DT_FACTOR +
-                        EXTERNAL_COUPLING_TERM * DT_FACTOR;
+                        D_final * (U_CURR - U_PREV);
                 }
 
-                val -= (val - U_CURR) * VISCOSITY;
+                if (VISCOSITY > 0) val -= (val - U_CURR) * VISCOSITY;
 
+                // Clamp to avoid Infinity explosion
                 if (val > 20) val = 20 + (val - 20) * 0.1;
-                if (val < -20) val = -20 + (val + 20) * 0.1;
-                u_n[idx][ptr] = val;
+                else if (val < -20) val = -20 + (val + 20) * 0.1;
+                
+                u_next_arr[ptr] = val;
             }
         }
 
+        // Boundary Conditions
         if (effBnd === 'ABSORBING') {
             const S = Math.sqrt(finalC) * DT_FACTOR;
             const murCoeff = (S - 1.0) / (S + 1.0);
-
+            
+            // OPTIMIZATION: Loop unrolling for boundaries isn't strictly necessary for JS JIT, 
+            // but clear access patterns help.
+            // Writing to u_next_arr (was u_n[idx])
+            
+            // Top/Bottom
             for (let k = 1; k < N - 1; k++) {
                 let ptrTop = k;
                 let ptrTopNeigh = ptrTop + N;
-                u_n[idx][ptrTop] = u[idx][ptrTopNeigh] + murCoeff * (u_n[idx][ptrTopNeigh] - u[idx][ptrTop]);
+                u_next_arr[ptrTop] = u_current_arr[ptrTopNeigh] + murCoeff * (u_next_arr[ptrTopNeigh] - u_current_arr[ptrTop]);
 
                 let ptrBot = (N - 1) * N + k;
                 let ptrBotNeigh = ptrBot - N;
-                u_n[idx][ptrBot] = u[idx][ptrBotNeigh] + murCoeff * (u_n[idx][ptrBotNeigh] - u[idx][ptrBot]);
-
+                u_next_arr[ptrBot] = u_current_arr[ptrBotNeigh] + murCoeff * (u_next_arr[ptrBotNeigh] - u_current_arr[ptrBot]);
+            }
+            
+            // Left/Right
+            for (let k = 1; k < N - 1; k++) {
                 let ptrLeft = k * N;
                 let ptrLeftNeigh = ptrLeft + 1;
-                u_n[idx][ptrLeft] = u[idx][ptrLeftNeigh] + murCoeff * (u_n[idx][ptrLeftNeigh] - u[idx][ptrLeft]);
+                u_next_arr[ptrLeft] = u_current_arr[ptrLeftNeigh] + murCoeff * (u_next_arr[ptrLeftNeigh] - u_current_arr[ptrLeft]);
 
                 let ptrRight = k * N + N - 1;
                 let ptrRightNeigh = ptrRight - 1;
-                u_n[idx][ptrRight] = u[idx][ptrRightNeigh] + murCoeff * (u_n[idx][ptrRightNeigh] - u[idx][ptrRight]);
+                u_next_arr[ptrRight] = u_current_arr[ptrRightNeigh] + murCoeff * (u_next_arr[ptrRightNeigh] - u_current_arr[ptrRight]);
             }
-
-            u_n[idx][0] = (u_n[idx][1] + u_n[idx][N]) * 0.5;
-            u_n[idx][N - 1] = (u_n[idx][N - 2] + u_n[idx][2 * N - 1]) * 0.5;
-            u_n[idx][(N - 1) * N] = (u_n[idx][(N - 1) * N + 1] + u_n[idx][(N - 2) * N]) * 0.5;
-            u_n[idx][N * N - 1] = (u_n[idx][N * N - 2] + u_n[idx][(N - 1) * N - 1]) * 0.5;
+            // Corners (Average neighbors)
+            u_next_arr[0] = (u_next_arr[1] + u_next_arr[N]) * 0.5;
+            u_next_arr[N - 1] = (u_next_arr[N - 2] + u_next_arr[2 * N - 1]) * 0.5;
+            u_next_arr[(N - 1) * N] = (u_next_arr[(N - 1) * N + 1] + u_next_arr[(N - 2) * N]) * 0.5;
+            u_next_arr[N * N - 1] = (u_next_arr[N * N - 2] + u_next_arr[(N - 1) * N - 1]) * 0.5;
 
         } else {
+            // FIXED BOUNDARY: Just zero out edges
             for (let k = 0; k < N; k++) {
-                u_n[idx][k] = 0;
-                u_n[idx][(N - 1) * N + k] = 0;
-                u_n[idx][k * N] = 0;
-                u_n[idx][k * N + N - 1] = 0;
+                u_next_arr[k] = 0;
+                u_next_arr[(N - 1) * N + k] = 0;
+                u_next_arr[k * N] = 0;
+                u_next_arr[k * N + N - 1] = 0;
             }
         }
     });
+
+    // POINTER SWAP (The Magic Trick)
+    // Rotate buffers:
+    // Old Prev -> becomes new Aux (Scratchpad for next frame)
+    // Old Curr -> becomes new Prev
+    // Old Next (Aux) -> becomes new Curr
+    
+    var temp = u_prev;
     u_prev = u;
-    u = u_n;
+    u = u_aux;
+    u_aux = temp;
 }
-
-
-
 
 
         function loop() {
@@ -1870,55 +1953,56 @@ function sim() {
             }
         }
 
-        function resizeSim(newGrid) {
-            const expansionState = getExpansionState();
-            if (newGrid === GRID) return;
-            var oldGrid = GRID;
-            GRID = newGrid;
-            $('l-res').innerText = GRID;
-            
-            var newU = [], newUPrev = [], newDen = [];
-            
-            
-            layers.forEach((l, idx) => {
-                var nU = new Float32Array(GRID*GRID);
-                var nUP = new Float32Array(GRID*GRID);
-                var nD = new Float32Array(GRID*GRID);
-                for(let r=0; r<GRID; r++) {
-                    for(let c=0; c<GRID; c++) {
-                        var nr = r / (GRID-1);
-                        var nc = c / (GRID-1);
-                        nU[r*GRID+c] = sampleGrid(u[idx], oldGrid, nr, nc);
-                        nUP[r*GRID+c] = sampleGrid(u_prev[idx], oldGrid, nr, nc);
-                        nD[r*GRID+c] = sampleGrid(den[idx], oldGrid, nr, nc);
-                    }
-                }
-                newU.push(nU); newUPrev.push(nUP); newDen.push(nD);
-            });
-            u = newU; u_prev = newUPrev; den = newDen;
-
-            
-            var newGlobalDen = new Float32Array(GRID*GRID);
-            for(let r=0; r<GRID; r++) {
-                for(let c=0; c<GRID; c++) {
-                    var nr = r / (GRID-1);
-                    var nc = c / (GRID-1);
-                    newGlobalDen[r*GRID+c] = sampleGrid(GLOBAL_DEN, oldGrid, nr, nc);
-                }
+function resizeSim(newGrid) {
+    const expansionState = getExpansionState();
+    if (newGrid === GRID) return;
+    var oldGrid = GRID;
+    GRID = newGrid;
+    $('l-res').innerText = GRID;
+    
+    var newU = [], newUPrev = [], newUAux = [], newDen = [];
+    
+    layers.forEach((l, idx) => {
+        var nU = new Float32Array(GRID*GRID);
+        var nUP = new Float32Array(GRID*GRID);
+        var nUA = new Float32Array(GRID*GRID); // New Aux
+        var nD = new Float32Array(GRID*GRID);
+        for(let r=0; r<GRID; r++) {
+            for(let c=0; c<GRID; c++) {
+                var nr = r / (GRID-1);
+                var nc = c / (GRID-1);
+                nU[r*GRID+c] = sampleGrid(u[idx], oldGrid, nr, nc);
+                nUP[r*GRID+c] = sampleGrid(u_prev[idx], oldGrid, nr, nc);
+                // Aux doesn't need sampling, just empty space
+                nD[r*GRID+c] = sampleGrid(den[idx], oldGrid, nr, nc);
             }
-            GLOBAL_DEN = newGlobalDen;
-            
-            var ratio = (GRID-1) / (oldGrid-1);
-            emits.forEach(e => {
-                e.i = Math.round(e.i * ratio);
-                e.j = Math.round(e.j * ratio);
-                if(e.i2) e.i2 = Math.round(e.i2 * ratio);
-                if(e.j2) e.j2 = Math.round(e.j2 * ratio);
-            });
-
-            syncM();
-            restoreExpansionState(expansionState);
         }
+        newU.push(nU); newUPrev.push(nUP); newUAux.push(nUA); newDen.push(nD);
+    });
+    u = newU; u_prev = newUPrev; u_aux = newUAux; den = newDen;
+
+    // ... (rest of function remains the same) ...
+    var newGlobalDen = new Float32Array(GRID*GRID);
+    for(let r=0; r<GRID; r++) {
+        for(let c=0; c<GRID; c++) {
+            var nr = r / (GRID-1);
+            var nc = c / (GRID-1);
+            newGlobalDen[r*GRID+c] = sampleGrid(GLOBAL_DEN, oldGrid, nr, nc);
+        }
+    }
+    GLOBAL_DEN = newGlobalDen;
+    
+    var ratio = (GRID-1) / (oldGrid-1);
+    emits.forEach(e => {
+        e.i = Math.round(e.i * ratio);
+        e.j = Math.round(e.j * ratio);
+        if(e.i2) e.i2 = Math.round(e.i2 * ratio);
+        if(e.j2) e.j2 = Math.round(e.j2 * ratio);
+    });
+
+    syncM();
+    restoreExpansionState(expansionState);
+}
 
         function clearSimulation() {
             emits = emits.filter(e => e.type !== 'EMITTER_LINE_DRAG');
@@ -2172,17 +2256,21 @@ function sim() {
             IS_PAUSED = false; 
         }
 
-        function initData() {
-            GRID = +$('i-res').value;
-            u = layers.map(()=>new Float32Array(GRID*GRID));
-            u_prev = layers.map(()=>new Float32Array(GRID*GRID));
-            den = layers.map(()=>new Float32Array(GRID*GRID));
-            if (GLOBAL_DEN.length !== GRID*GRID) {
-                 GLOBAL_DEN = new Float32Array(GRID*GRID);
-            }
-            syncM();
-            $('l-res').innerText = GRID;
-        }
+function initData() {
+    GRID = +$('i-res').value;
+    // Create Float32Arrays for Current, Previous, and density
+    u = layers.map(()=>new Float32Array(GRID*GRID));
+    u_prev = layers.map(()=>new Float32Array(GRID*GRID));
+    // NEW: Create the auxiliary buffer for the next frame calculation
+    u_aux = layers.map(()=>new Float32Array(GRID*GRID));
+    den = layers.map(()=>new Float32Array(GRID*GRID));
+    
+    if (GLOBAL_DEN.length !== GRID*GRID) {
+            GLOBAL_DEN = new Float32Array(GRID*GRID);
+    }
+    syncM();
+    $('l-res').innerText = GRID;
+}
         
         function resetSimulationAndState() {
             IS_PAUSED = true;
