@@ -1,0 +1,3137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Physics Sandbox 3D (Enhanced)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        :root {
+            --color-bg-dark: #1e2125;
+            --color-bg-medium: #2b3035;
+            --color-bg-light: #383f46;
+            --color-border: #555b63;
+            --color-text: #e0e6f0;
+            --color-active: #68b2f0;
+            --color-warning: #e5b300;
+            --color-danger: #622;
+            --spacing-unit: 4px;
+            --border-width: 1px;
+            --font-size: 12px;
+            --input-height: 24px;
+            --color-slider-track: #111;
+            --color-slider-thumb: #888;
+            --color-slider-progress: #555;
+            --toolbar-height: 40px;
+            --sidebar-width: 320px;
+            --input-padding: 2px 4px;
+        }
+
+        body { 
+            margin: 0; font-family: 'Inter', sans-serif; 
+            background: var(--color-bg-dark); color: var(--color-text); 
+            overflow: hidden; display: flex; flex-direction: column; height: 100vh; font-size: var(--font-size);
+        }
+        
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: var(--color-bg-medium); }
+        ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--color-active); }
+
+        #app-container {
+            display: flex;
+            flex-grow: 1;
+            width: 100%;
+            height: calc(100vh - var(--toolbar-height));
+        }
+
+        #top-toolbar {
+            height: var(--toolbar-height);
+            background: var(--color-bg-medium);
+            border-bottom: 1px solid #000;
+            display: flex;
+            align-items: center;
+            padding: 0 8px;
+            gap: 8px;
+        }
+
+        #top-toolbar button {
+            width: auto;
+            padding: 4px 10px;
+        }
+
+        #sidebar { 
+            width: var(--sidebar-width); background: var(--color-bg-medium); padding: 8px; 
+            overflow-y: auto; border-right: 1px solid #000; 
+            display: flex; flex-direction: column; gap: 6px; 
+            resize: horizontal; min-width: 250px; max-width: 600px;
+        }
+        
+        #canvas-container { flex-grow: 1; position: relative; cursor: crosshair; overflow: hidden; }
+        
+        input, select, button, textarea { 
+            background: var(--color-bg-light); color: var(--color-text); 
+            border: 1px solid var(--color-border); width: 100%; 
+            font-family: inherit; font-size: 11px; padding: var(--input-padding); 
+            margin-bottom: 4px; height: var(--input-height); box-sizing: border-box; 
+            border-radius: 4px;
+        }
+        
+        input:focus, select:focus, textarea:focus { outline: 1px solid var(--color-active); border-color: var(--color-active); }
+
+        input[type="range"] {
+            height: 6px; margin: 4px 0; cursor: grab; -webkit-appearance: none; background: transparent;
+        }
+        input[type="range"]::-webkit-slider-runnable-track {
+            width: 100%; height: 4px; background: var(--color-slider-track); border-radius: 2px;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 14px; height: 14px; 
+            background: var(--color-slider-thumb); border: 2px solid #000; 
+            border-radius: 50%; cursor: pointer; margin-top: -5px;
+        }
+        
+        .value-label {
+            font-family: monospace;
+            font-size: 13px;
+            font-weight: normal;
+            color: var(--color-active);
+            min-width: 40px; 
+            display: inline-block;
+            text-align: right;
+        }
+
+        button { cursor: pointer; font-weight: 600; transition: background 0.1s; border-radius: 4px; }
+        button:hover { background: #4a525a; }
+        button:active { background: #222; }
+        button.active { background: var(--color-active); color: var(--color-bg-medium); border-color: #000; }
+        
+        .row { display: flex; gap: 4px; align-items: center; }
+        .layer-box { 
+            border: 1px solid var(--color-border); 
+            padding: 6px; 
+            margin-top: 8px; 
+            border-radius: 6px; 
+            background: var(--color-bg-light); 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        #ctx-menu, #sdf-menu { 
+            position: fixed; 
+            background: var(--color-bg-medium); 
+            border: 1px solid var(--color-active); 
+            padding: 10px; 
+            z-index: 1000; 
+            display: none; 
+            width: 280px; 
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5); 
+            border-radius: 6px;
+        }
+        
+        #sdf-menu {
+             cursor: grab;
+             top: 50px; 
+             left: 400px;
+        }
+
+        #emit-menu {
+            position: fixed;
+            top: var(--toolbar-height); 
+            left: var(--sidebar-width); 
+            z-index: 1001;
+            background: var(--color-bg-medium); 
+            border: 1px solid var(--color-active); 
+            padding: 8px; 
+            width: 260px; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5); 
+            border-radius: 0 0 4px 4px;
+            cursor: grab; 
+        }
+        #emit-menu h3 {
+             cursor: grab;
+             margin-top: 0;
+        }
+        
+        label { font-size: 10px; color: #aaa; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px; }
+        h3, h4 { margin: 10px 0 6px 0; font-size: 12px; border-bottom: 1px solid var(--color-border); padding-bottom: 4px; color: #fff; }
+        h3:first-child { margin-top: 0; }
+        #err { color: #ff6b6b; font-size: 11px; min-height: 14px; font-weight: bold; margin-bottom: 4px; }
+        
+        .color-picker-row { display: flex; gap: 4px; align-items: center; justify-content: space-between; margin-bottom: 2px; }
+        .color-picker-row input[type="color"] { width: 40px; height: 20px; padding: 0; border: none; cursor: pointer; }
+        
+        #sdf-preview { border: 1px solid var(--color-border); margin-bottom: 8px; background: #000; width: 100%; height: auto; aspect-ratio: 1; border-radius: 4px; }
+
+        .expandable-header {
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px;
+            margin-top: 6px;
+            border-bottom: 1px solid var(--color-border);
+            font-weight: bold;
+            color: #fff;
+            font-size: 13px;
+        }
+        .expandable-content {
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+            max-height: 0;
+            padding-bottom: 0;
+        }
+        .expandable-content.expanded {
+            max-height: 1500px; 
+            padding-bottom: 8px;
+        }
+        .expand-arrow {
+            transition: transform 0.3s ease;
+        }
+        .expanded .expand-arrow {
+            transform: rotate(90deg);
+        }
+
+        .coupling-link {
+            border: 1px solid var(--color-border);
+            padding: 6px;
+            margin-bottom: 4px;
+            border-radius: 4px;
+            background: var(--color-bg-light);
+        }
+        .coupling-link label {
+            display: block;
+            margin-top: 4px;
+            font-size: 11px;
+            text-transform: none;
+            font-weight: normal;
+            color: #ccc;
+        }
+        .coupling-link select {
+            width: calc(50% - 2px);
+            display: inline-block;
+        }
+
+        body.cinematic-mode #sidebar, 
+        body.cinematic-mode #ctx-menu, 
+        body.cinematic-mode #sdf-menu, 
+        body.cinematic-mode #emit-menu,
+        body.cinematic-mode #top-toolbar { 
+            display: none !important; 
+        }
+        body.cinematic-mode #canvas-container {
+            cursor: none;
+        }
+body.cinematic-mode #app-container {
+    height: 100vh;
+}
+body.cinematic-mode #canvas-container {
+    cursor: none;
+    width: 100% !important; 
+    height: 100% !important; 
+    max-width: none !important; 
+}
+    </style>
+</head>
+<body oncontextmenu="return false;">
+    <div id="top-toolbar">
+        <button id="btn-toggle-play" style="width:100px; background:var(--color-warning); border-color:var(--color-warning);">Pause</button>
+        <button id="btn-toggle-ui">Cinematic Mode (F3)</button>
+        
+        <div id="volume-mode-toggle" class="row">
+            <button id="btn-vol" style="background: #2b4455; border-color: #4a7a9c;">Create Volume</button>
+            <div id="vol-controls-toolbar" class="row" style="display:none; gap:4px;">
+                <label style="color:var(--color-active); margin-right:4px;">Volume Active</label>
+                <button id="btn-exit-vol" style="background:#555">Exit 3D Mode</button>
+            </div>
+        </div>
+        
+        <div id="camera-controls" class="row">
+            <button id="btn-cam-top">Top View</button>
+            <div id="3d-cam-controls" class="row" style="display:none;">
+                <button id="btn-cam-left">Left</button>
+                <button id="btn-cam-right">Right</button>
+                <button id="btn-cam-bottom">Bottom</button>
+            </div>
+        </div>
+    </div>
+    <div id="app-container">
+        <div id="sidebar">
+            
+            <h4 style="margin-top: 2px; border-bottom: none; padding-bottom: 0; color: #9cf;">Global Controls & Reset</h4>
+            <div class="row">
+                <button id="btn-clear" style="width:50%; background:#777; border-color:#999;">Clear Waves</button>
+                <button id="btn-reset-density" style="width:50%; background:#777; border-color:#999;">Reset Density</button>
+            </div>
+            <div class="row" style="margin-bottom: 8px;">
+                <button id="btn-reset-settings" style="width:50%; background:#966; border-color:#b88;">Reset View/Settings</button>
+                <button id="btn-full-reset" style="width:50%; background:var(--color-danger); border-color:#844;">Full Reset All</button>
+            </div>
+
+            <h4 style="margin-top: 10px; border-bottom: none; padding-bottom: 0;">Interaction Tools</h4>
+            <div class="row" style="margin-top: 2px;">
+                <button id="b-dist" class="active" data-brush="DISTURBANCE">Impulse</button>
+                <button id="b-emit" data-brush="EMITTER_PLACE">Emit</button>
+                <button id="b-den" data-brush="DENSITY_PAINT">Paint</button>
+                <button id="b-sdf" data-brush="SDF_PLACE">Stamp</button>
+            </div>
+
+
+            <div id="brush-controls-group">
+                <div class="expandable-header" data-target="brush-controls-content">
+                    Brush Controls <span class="expand-arrow">&#x25B8;</span>
+                </div>
+                <div id="brush-controls-content" class="expandable-content expanded">
+                    <div id="dynamic-brush-controls"></div>
+                </div>
+            </div>
+            
+            <div id="global-coupling-group">
+                <div class="expandable-header" data-target="global-coupling-content">
+                    Global Coupling Matrix <span class="expand-arrow">&#x25B8;</span>
+                </div>
+                <div id="global-coupling-content" class="expandable-content">
+                    <div id="coupling-links-container">
+                        
+                    </div>
+                    <button id="btn-add-coupling" style="margin-top: 8px;">+ Add Coupling Link</button>
+                </div>
+            </div>
+
+            <div id="global-density-group">
+                <div class="expandable-header" data-target="global-density-content">
+                    Global Density Layer <span class="expand-arrow">&#x25B8;</span>
+                </div>
+                <div id="global-density-content" class="expandable-content">
+                    <label>Absorption (Global Damping): <span id="l-gden-abs" class="value-label">0.000</span></label>
+                    <input type="range" id="i-gden-abs" min="0.0" max="0.05" value="0.0" step="0.001">
+                    <label>Refraction (Speed Factor): <span id="l-gden-ref" class="value-label">1.00</span></label>
+                    <input type="range" id="i-gden-ref" min="0.5" max="2.0" value="1.0" step="0.01">
+                    <button id="btn-reset-global-den" style="margin-top: 8px;">Reset Global Density</button>
+                </div>
+            </div>
+
+            <div id="view-settings-group">
+                <div class="expandable-header" data-target="view-settings-content">
+                    Camera/View Settings <span class="expand-arrow">&#x25B8;</span>
+                </div>
+                <div id="view-settings-content" class="expandable-content">
+                    <label>Grid Res: <span id="l-res" class="value-label">80</span></label><input type="range" id="i-res" min="20" max="200" value="80" step="10">
+                    <label>Layer Gap: <span id="l-gap" class="value-label">15</span></label><input type="range" id="i-gap" min="1" max="50" value="15">
+                    <label>Z-Scale: <span id="l-z" class="value-label">2.0</span></label><input type="range" id="i-z" min="0.5" max="5" value="2.0" step="0.1">
+                    
+                    <label>Visibility Range (Clip): <span id="l-vism" class="value-label">0.00 - 1.00</span></label>
+                    <div class="row">
+                        <input type="range" id="i-vis-min" min="0" max="1" step="0.01" value="0.0" title="Min Threshold">
+                        <input type="range" id="i-vis-max" min="0" max="1" step="0.01" value="1.0" title="Max Threshold">
+                    </div>
+
+                    <label>Global Opacity: <span id="l-vo" class="value-label">0.50</span></label>
+                    <input type="range" id="i-vo" min="0.01" max="1.0" value="0.5" step="0.01">
+
+                    <label>Lighting Intensity: <span id="l-li" class="value-label">1.0</span></label><input type="range" id="i-li" min="0.1" max="2" value="1.0" step="0.1">
+                    <label>Sun Pitch/Yaw</label>
+                    <div class="row"><input type="range" id="i-sp" min="0" max="90" value="45"><input type="range" id="i-sy" min="0" max="360" value="45"></div>
+                </div>
+            </div>
+
+            <div id="volume-settings-group-sidebar">
+                <div class="expandable-header" data-target="volume-settings-content">
+                    Visualization &amp; Styling (Global) <span class="expand-arrow">&#x25B8;</span>
+                </div>
+                <div id="volume-settings-content" class="expandable-content">
+                    <div id="vol-controls-sidebar" style="padding: 4px; background: rgba(104, 178, 240, 0.1); border-radius: 4px; margin-bottom: 8px; display:none;">
+                        <label>Z-Depth (Layers): <span id="l-vd" class="value-label">40</span></label><input type="range" id="i-vd" min="10" max="100" value="40" step="1">
+                        <label>Point Base Size: <span id="l-psz" class="value-label">2.0</span></label><input type="range" id="i-psz" min="0.1" max="20.0" step="0.1" value="2.0">
+                        <label>Point Scale Factor: <span id="l-psc" class="value-label">3.5</span></label><input type="range" id="i-psc" min="0.0" max="10.0" step="0.1" value="3.5">
+                        <label>Point Falloff: <span id="l-pf" class="value-label">0.50</span></label><input type="range" id="i-pf" min="0.0" max="1.0" step="0.01" value="0.5">
+                        <div class="row">
+                            <input type="checkbox" id="cb-iso" checked style="width:auto; margin:0;"><label style="margin-left:4px;">Force Isotropic (Proper 3D)</label>
+                        </div>
+
+                        <h4 style="margin-top: 10px;">Visualization (Global)</h4>
+                        <div class="row"><label>Shading Mode</label><select id="vol-shade-select" style="width:100%;">
+                            <option value="SPECULAR">Default (Specular)</option>
+                            <option value="HEIGHT">Height-Based</option>
+                            <option value="VELOCITY">Velocity Gradient</option>
+                            <option value="ENERGY">Heatmap (Energy)</option>
+                            <option value="DIVERGENCE">Divergence (Red/Blue)</option>
+                            <option value="VECTOR_RGB">Vector RGB (Points only)</option>
+                        </select></div>
+                        <h4 style="border-bottom:none; margin-top: 5px;">Gradient Stops</h4>
+                        <div id="vol-gradient-stops"></div>
+                        <label>Grad. Bias: <span id="l-vol-gb" class="value-label">0.00</span></label><input type="range" id="i-vol-gb" min="-1.0" max="1.0" step="0.05" value="0.0">
+                        <label>Grad. Contrast: <span id="l-vol-gc" class="value-label">1.0</span></label><input type="range" id="i-vol-gc" min="0.1" max="5.0" step="0.1" value="1.0">
+                        <button id="btn-add-vol-stop" style="margin-top:4px;">+ Add Stop</button>
+                    </div>
+                </div>
+            </div>
+
+
+            <div id="sim-speed-group">
+                <div class="expandable-header" data-target="sim-speed-content">
+                    Simulation Speed <span class="expand-arrow">&#x25B8;</span>
+                </div>
+                <div id="sim-speed-content" class="expandable-content">
+                    <label>Time Step (dt): <span id="l-dt" class="value-label">1.0</span></label><input type="range" id="i-dt" min="0.1" max="3.0" value="1.0" step="0.1">
+                    <label>Global Viscosity: <span id="l-vis" class="value-label">0.000</span></label><input type="range" id="i-vis" min="0.0" max="0.05" value="0.0" step="0.001">
+                </div>
+            </div>
+            
+            <div id="presets-group">
+                <div class="expandable-header" data-target="presets-content">
+                    Configuration I/O <span class="expand-arrow">&#x25B8;</span>
+                </div>
+                <div id="presets-content" class="expandable-content">
+                    <label style="color:#aaa; font-weight:normal;">Save and Load your current simulation state.</label>
+                    <div class="row" style="margin-top: 5px;">
+                        <button id="btn-save-preset">Save Config (.txt)</button>
+                        <button id="btn-load-preset">Load Config (.txt)</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="layers-group">
+                <div class="expandable-header" data-target="layers-content">
+                    Layers (2D Mode Only) <span class="expand-arrow">&#x25B8;</span>
+                </div>
+                <div id="layers-content" class="expandable-content expanded">
+                    <div class="row" style="margin-top: 5px;">
+                        <button id="btn-add">Add Layer</button>
+                        <button id="btn-rem">Remove Layer</button>
+                    </div>
+                    <div id="err"></div>
+                    <div id="layers"></div>
+                </div>
+            </div>
+        </div>
+        <div id="canvas-container"></div>
+    </div>
+
+    <div id="ctx-menu">
+        <button id="cm-move">Move</button>
+        <button id="cm-set">Settings</button>
+        <button id="cm-tog">Toggle Type</button>
+        <button id="cm-del" style="background:var(--color-danger)">Delete</button>
+    </div>
+
+    <div id="sdf-menu">
+        <h3>Shape Builder</h3>
+        <canvas id="sdf-preview" width="260" height="260"></canvas>
+        
+        <label>Shape Type</label>
+        <select id="sdf-type">
+            <option value="SLAB">Slab (Rectangle)</option>
+            <option value="HOLLOW_BOX">Hollow Box</option>
+            <option value="ELLIPSE">Elliptical Lens</option>
+            <option value="PARABOLA">Parabolic Mirror</option>
+            <option value="SLITS">Slit Pattern (Diffraction)</option>
+        </select>
+        
+        <div id="sdf-dynamic-controls"></div>
+        
+        <h4 style="margin-top: 10px;">Stamping Controls</h4>
+        <label>Density (Refraction Index): <span id="l-sdf-den" class="value-label">1.00</span></label>
+        <input type="range" id="i-sdf-den" min="0.0" max="1.0" value="1.0" step="0.05">
+        
+        <label>Stamping Mode (Click to Stamp)</label>
+        <select id="sdf-mode-toggle" style="width:100%;">
+            <option value="REPLACE">Replace (Overwrite Density)</option>
+            <option value="ADD">Add (Increase Density, Max 1.0)</option>
+        </select>
+
+        <div class="row" style="margin-top: 8px; justify-content: flex-end;">
+            <button id="sdf-close">Close</button>
+        </div>
+    </div>
+
+    <div id="emit-menu">
+        <h3>Emitter Settings</h3>
+        <label>Geometry</label>
+        <select id="em-geo">
+            <option value="POINT">Point Source</option>
+            <option value="LINE">Line Source (One-Way)</option>
+        </select>
+        <label>Wave Shape</label>
+        <select id="em-shp">
+            <option value="STATIC">Static (Constant)</option>
+            <option value="SINE">Sine Wave</option>
+            <option value="COSINE">Cosine Wave</option>
+            <option value="SQUARE">Square Wave</option>
+            <option value="SAW">Sawtooth Wave</option>
+            <option value="NOISE">Noise (Random)</option>
+        </select>
+        <label>Strength (Neg=Sink, Pos=Source): <span id="em-st-v" class="value-label"></span></label>
+        <input type="range" id="em-st" min="-10" max="10" step="0.1" value="1">
+        <label>Frequency: <span id="em-rt-v" class="value-label"></span></label><input type="range" id="i-em-rt" min="10" max="500" step="10">
+        <label>Phase Offset: <span id="em-of-v" class="value-label"></span></label><input type="range" id="i-em-of" min="0" max="360" step="10">
+        <div class="row" style="margin-top: 8px;">
+            <button id="em-del-btn" style="background:var(--color-danger)">Remove Emitter</button>
+            <button id="em-close">Close</button>
+        </div>
+    </div>
+
+    <script>
+        var $ = id => document.getElementById(id);
+        var EV = (id, t, fn) => { const el=$(id); if(el) el.addEventListener(t, fn); };
+        
+        var GRID = 80, GAP = 15, ZSC = 2.0, TIME = 0;
+        var scene, camera, renderer, raycaster, canvasContainer;
+        var IS_3D_MODE = false;
+        var VOL_LAYERS = 40;
+        var IS_PAUSED = false; 
+        
+        var layers = [], u = [], u_prev = [], den = [], meshes = [], emitMeshes = [], obsMeshes = [];
+        var emits = [], shapes = [], brush = 'DISTURBANCE';
+        var mRad = 10, mVal = 0.5, sunDir = new THREE.Vector3(), lInt = 1.0;
+        var isOrbit = false, isDrag = false, actEmit = null, mX = 0, mY = 0, rad = 60, theta = 45, phi = 60;
+        var sdfCoords = null, editEmitId = null, actEmitPart = 'BODY';
+        var TGT = new THREE.Vector3(0,0,0);
+        var brushHnd = 0.0; 
+        var DT_FACTOR = 1.0;
+        var VISCOSITY = 0.0;
+        var layerCounter = 0; 
+        var visMin = 0.0, visMax = 1.0;
+        
+        var IMPULSE_MAGNITUDE = 5.0; 
+        var IS_IMPULSE_HOLD = false; 
+        var IMPULSE_SHAPE = 'GAUSSIAN'; 
+        var IMPULSE_WAVE_TYPE = 'CONSTANT';
+        var IMPULSE_WAVELENGTH = 50; 
+
+        var dragStartGridCoords = {i: 0, j: 0, i2: 0, j2: 0};
+        var isContinuousBrushActive = false;
+        var pulseStartTime = 0; 
+        var activeBrushHit = null; 
+
+        var DEN_FLOW_RATE = 0.1;
+        var DEN_BRUSH_MODE = 'REPLACE';
+        var GLOBAL_DEN = new Float32Array(GRID*GRID);
+        var GLOBAL_DEN_ABSORPTION = 0.0; 
+        var GLOBAL_DEN_REFRACTION = 1.0; 
+        var sdfPlacementGrid = { i: 40, j: 40, lIdx: 0 }; 
+        var GLOBAL_COUPLING_LINKS = []; 
+        var SDF_STAMP_MODE = 'REPLACE'; 
+        
+        var dragPlane = new THREE.Plane();
+        var dragStartOffset = new THREE.Vector3();
+        
+        const MAX_GRADIENT_STOPS = 8;
+        var currentSDFParams = { 
+            type: 'SLAB', density: 1.0, 
+            width: 40, height: 20, thickness: 5,
+            radiusX: 30, radiusY: 15, focalLength: 10,
+            slitCount: 2, slitWidth: 4, spacing: 10
+        };
+        
+        const DEFAULT_GRADIENT_STOPS = [[10, 50, 200], [255, 100, 50]];
+        const DEFAULT_VOL_GRADIENT_STOPS = [[100, 200, 255], [255, 255, 255]];
+
+        const BASE_POINT_SETTINGS = {
+            pointSize: 2.0,
+            pointScaleFactor: 3.5,
+            pointFalloff: 0.5
+        };
+
+        const FORMULA_PRESETS = {
+            WAVE: {
+                name: 'Standard Wave Equation',
+                defaultC: 0.25, defaultD: 0.005, C_label: 'Wave Speed (C)', D_label: 'Damping (D)', C_max: 0.5, D_max: 0.1
+            },
+            DIFFUSION: {
+                name: 'Simple Diffusion',
+                defaultC: 0.2, defaultD: 0.001, C_label: 'Diffusion Rate (C)', D_label: 'Decay Rate (D)', C_max: 0.5, D_max: 0.01
+            },
+            REACTION: {
+                name: 'Reaction-Diffusion (Single Component)',
+                defaultC: 0.16, defaultD: 0.062, C_label: 'Feed Rate (F)', D_label: 'Kill Rate (k)', C_max: 0.3, D_max: 0.1
+            }
+        };
+
+        const BASE_LAYER_CFG = {
+            C: FORMULA_PRESETS.WAVE.defaultC, D: FORMULA_PRESETS.WAVE.defaultD, K: 0.0, vis: true, intr: true, bnd: 'FIXED', 
+            visMode: 'MESH', shadingMode: 'DIVERGENCE', 
+            formulaKey: 'WAVE',
+            gradientBias: 0.0, gradientContrast: 1.0, 
+            gradientStops: DEFAULT_GRADIENT_STOPS,
+            volShadingMode: 'DIVERGENCE',
+            volGradientStops: DEFAULT_VOL_GRADIENT_STOPS,
+            volGradientBias: 0.0,
+            volGradientContrast: 1.0,
+            pointSize: BASE_POINT_SETTINGS.pointSize,
+            pointScaleFactor: BASE_POINT_SETTINGS.pointScaleFactor,
+            pointFalloff: BASE_POINT_SETTINGS.pointFalloff,
+        };
+        
+        const DEFAULT_STATE_CONFIG = {
+            global: { 
+                GRID: 80, GAP: 15, ZSC: 2.0, DT_FACTOR: 1.0, VISCOSITY: 0.0, lInt: 1.0, visMin: 0.0, visMax: 1.0, 
+                IS_3D_MODE: false, VOL_LAYERS: 40, sunPitch: 45, sunYaw: 45,
+                GLOBAL_DEN_ABSORPTION: 0.0, GLOBAL_DEN_REFRACTION: 1.0
+            },
+            layers: [{ ...BASE_LAYER_CFG, name: 'Layer 1', visMode: 'MESH', shadingMode: 'SPECULAR', C: 0.25, D: 0.005, intr: true }],
+            emits: [], camera: { rad: 60, theta: 45, phi: 60 },
+            globalDen: Array.from(new Float32Array(80*80).fill(0)),
+            globalCoupling: []
+        };
+        
+        var PRESETS = {
+             DEFAULT_WAVE: DEFAULT_STATE_CONFIG 
+        }; 
+
+       var GLSL_SHADE_FUNC = `
+            uniform bool uIsPoints;
+            varying vec3 vNormal; uniform vec3 SUN_DIR; uniform float LIGHT_INTENSITY;
+            uniform int SHADING_MODE; varying float vWaveHeight; varying float vWaveVelocity; varying float vDensity;
+            uniform float GRADIENT_BIAS; uniform float GRADIENT_CONTRAST;
+            uniform vec3 GRADIENT_STOPS[8]; uniform int GRADIENT_STOPS_COUNT;
+            uniform float VIS_MIN; uniform float VIS_MAX;
+            uniform float uOpacity;
+            uniform float uPointFalloff;
+
+            // Helper to get color maps
+            vec3 heatmap(float value) {
+                value = clamp(value, 0.0, 1.0);
+                if (value < 0.3) return mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), value / 0.3);
+                if (value < 0.7) return mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 1.0, 0.0), (value - 0.3) / 0.4);
+                return mix(vec3(1.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), (value - 0.7) / 0.3);
+            }
+
+            vec3 apply_gradient(float data_val) {
+                float shifted = clamp(data_val * GRADIENT_CONTRAST + GRADIENT_BIAS, 0.0, 1.0);
+                if (GRADIENT_STOPS_COUNT <= 1) return GRADIENT_STOPS[0];
+                float idx_f = shifted * float(GRADIENT_STOPS_COUNT - 1);
+                int idx_l = int(floor(idx_f)); int idx_h = int(ceil(idx_f));
+                return mix(GRADIENT_STOPS[idx_l], GRADIENT_STOPS[idx_h], fract(idx_f));
+            }
+
+            vec4 calculateColor() {
+                float raw = 0.0;
+                raw = abs(vWaveHeight) * 0.2; 
+                
+                // --- MODE SELECTION ---
+                if (SHADING_MODE == 1) raw = abs(vWaveHeight) * 0.2; 
+                else if (SHADING_MODE == 2) {
+                    float v = vWaveVelocity * 2.0;
+                    raw = (v / (1.0 + abs(v))) * 0.5 + 0.5; 
+                }
+                else if (SHADING_MODE == 3) raw = vWaveHeight * vWaveHeight * 0.02; 
+                
+                // Clip visibility range
+                if (raw < VIS_MIN || (raw > VIS_MAX && raw <= 1.0)) return vec4(0.0);
+
+                vec3 col;
+                
+                if (SHADING_MODE == 0) { // Default Specular
+                    vec3 base = GRADIENT_STOPS[0]; 
+                    float d = max(0.0, dot(vNormal, SUN_DIR)); 
+                    vec3 R = reflect(-SUN_DIR, vNormal);
+                    float spec = pow(max(0.0, dot(R, normalize(vec3(1.0, 1.5, 1.0)))), 15.0); 
+                    col = base * (vec3(0.4) + vec3(d) * LIGHT_INTENSITY) + vec3(1.0) * spec * LIGHT_INTENSITY; 
+                } 
+                else if (SHADING_MODE == 4) { // Divergence
+                    float v = clamp(vWaveHeight * 0.5, -1.0, 1.0);
+                    if (v < 0.0) col = mix(vec3(0.05), vec3(0.2, 0.5, 1.0), -v);
+                    else col = mix(vec3(0.05), vec3(1.0, 0.3, 0.2), v);
+                } 
+                else if (SHADING_MODE == 5) { // VECTOR RGB (SCIENTIFIC)
+                    // RED = Amplitude (Displacement)
+                    // Normalized to 0..1 range (0.5 is zero displacement)
+                    float r = clamp(vWaveHeight * 0.2 + 0.5, 0.0, 1.0);
+                    
+                    // GREEN = Velocity (First Derivative wrt Time)
+                    // Normalized so 0.5 is zero velocity
+                    float g = clamp(vWaveVelocity * 1.5 + 0.5, 0.0, 1.0);
+                    
+                    // BLUE = Laplacian (Second Spatial Derivative / Curvature)
+                    // We approximate curvature using the surface normal's Y component or implicit height data
+                    // A flat surface has high Y normal (close to 1.0). Steep waves have low Y normal.
+                    // This creates a visualization of "Strain" or "Force".
+                    float curvature = clamp(1.0 - vNormal.y, 0.0, 1.0); 
+                    float b = curvature * 4.0; // Boost signal
+                    
+                    col = vec3(r, g, b);
+                } 
+                else { // Gradients/Heatmaps
+                    vec3 map = (SHADING_MODE == 3) ? heatmap(clamp(raw,0.,1.)) : apply_gradient(raw);
+                    float d = max(0.0, dot(vNormal, SUN_DIR));
+                    col = map * (vec3(0.4) + d * LIGHT_INTENSITY * 0.8);
+                }
+                
+                // Density Damping Visual
+                col *= mix(1.0, 0.2, vDensity);
+                
+                return vec4(col, 0.9 * uOpacity);
+            }
+        `;
+        const defaultFs = GLSL_SHADE_FUNC + 'void main(){ float r2 = length(gl_PointCoord - vec2(0.5)); if(uIsPoints) { float falloff = mix(r2 > 0.5 ? 0.0 : 1.0, exp(-(r2*r2) * (15.0 - 14.0 * uPointFalloff)), uPointFalloff); if (falloff < 0.01) discard; } else if(r2 > 0.5) discard; vec4 c=calculateColor(); if(c.a == 0.0) discard; gl_FragColor=c;}'; 
+
+
+        var selectedEmitterId = null; 
+        var stampPreviewMesh = null;
+        
+        var rgbToNormVec = (rgb) => [rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0];
+        var toHex = (c) => `#${(c[0]<<16 | c[1]<<8 | c[2]).toString(16).padStart(6, '0')}`;
+        var hexToRgb = (hex) => [parseInt(hex.slice(1,3), 16), parseInt(hex.slice(3,5), 16), parseInt(hex.slice(5,7), 16)];
+        var clamp = (v) => Math.max(0, Math.min(1, v));
+        
+        
+        var uniformsArray = (colors) => { var arr = []; for(var c of colors) arr.push(c); return arr; };
+        var nm = e => { 
+            if (!canvasContainer) return new THREE.Vector2(0,0);
+            var r = canvasContainer.getBoundingClientRect(); 
+            return new THREE.Vector2(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1); 
+        };
+        
+        var gtw = (i, j, l) => {
+            const totalHeight = (layers.length - 1) * GAP * 0.1;
+            const centerYOffset = IS_3D_MODE ? totalHeight / 2 : 0;
+            const yPos = centerYOffset - (l * GAP * 0.1);
+            
+            return new THREE.Vector3(
+                (j/(GRID-1))*50-25, 
+                yPos, 
+                (i/(GRID-1))*50-25
+            );
+        };
+        
+        var wtg = (x, z) => ({i: Math.min(GRID-1, Math.max(0, ((z+25)/50)*GRID)|0), j: Math.min(GRID-1, Math.max(0, ((x+25)/50)*GRID)|0)});
+        var sampleGrid = (arr, oldGrid, r, c) => {
+            var i = r * (oldGrid-1), j = c * (oldGrid-1);
+            var i0 = Math.floor(i), i1 = Math.min(oldGrid-1, i0+1);
+            var j0 = Math.floor(j), j1 = Math.min(oldGrid-1, j0+1);
+            var di = i-i0, dj = j-j0;
+            var v00 = arr[i0*oldGrid+j0], v01 = arr[i0*oldGrid+j1];
+            var v10 = arr[i1*oldGrid+j0], v11 = arr[i1*oldGrid+j1];
+            return v00*(1-di)*(1-dj) + v01*(1-di)*dj + v10*di*(1-dj) + v11*di*dj;
+        };
+
+        function bresenhamLine(i1, j1, i2, j2) {
+            const points = [];
+            const dx = Math.abs(i2 - i1);
+            const dy = Math.abs(j2 - j1);
+            const sx = (i1 < i2) ? 1 : -1;
+            const sy = (j1 < j2) ? 1 : -1;
+            let err = dx - dy;
+
+            let i = i1;
+            let j = j1;
+
+            while (true) {
+                points.push({i, j});
+
+                if (i === i2 && j === j2) break;
+
+                const e2 = 2 * err;
+                if (e2 > -dy) {
+                    err -= dy;
+                    i += sx;
+                }
+                if (e2 < dx) {
+                    err += dx;
+                    j += sy;
+                }
+            }
+            return points;
+        }
+        
+        function getImpulseWaveValue(timeOffset) {
+            let value = 0;
+            const period = IMPULSE_WAVELENGTH;
+            const normalizedTime = (timeOffset % period) / period; 
+
+            if (IS_IMPULSE_HOLD) {
+                 if (IMPULSE_WAVE_TYPE === 'CONSTANT') {
+                    value = 1.0;
+                 } else if (IMPULSE_WAVE_TYPE === 'SINE') {
+                    value = Math.sin(normalizedTime * 2 * Math.PI);
+                 } else if (IMPULSE_WAVE_TYPE === 'SQUARE') {
+                    value = Math.sign(Math.sin(normalizedTime * 2 * Math.PI));
+                 } else if (IMPULSE_WAVE_TYPE === 'SAW') {
+                    value = 2 * normalizedTime - 1; 
+                 }
+            } else {
+                
+                if (timeOffset < period) {
+                    if (IMPULSE_WAVE_TYPE === 'CONSTANT') {
+                        value = 1.0;
+                    } else if (IMPULSE_WAVE_TYPE === 'SINE') {
+                        value = Math.sin(normalizedTime * Math.PI);
+                    } else if (IMPULSE_WAVE_TYPE === 'SQUARE') {
+                        value = 1.0; 
+                    } else if (IMPULSE_WAVE_TYPE === 'SAW') {
+                         value = 1.0 - normalizedTime; 
+                    }
+                } else {
+                    return 0; 
+                }
+            }
+            return value;
+        }
+
+
+        function getBrushFalloff(dist, magnitude) {
+            if (IMPULSE_SHAPE === 'GAUSSIAN') {
+                const hardnessFactor = 1.0 - brushHnd; 
+                const sigma = mRad * (0.1 + 0.5 * hardnessFactor); 
+                return Math.exp(-(dist * dist) / (2 * sigma * sigma)) * magnitude;
+            } else { 
+                if (dist > mRad) return 0;
+                const softZone = mRad * (1.0 - brushHnd);
+                if (dist > softZone) {
+                    return magnitude * (1.0 - (dist - softZone) / (mRad - softZone));
+                }
+                return magnitude;
+            }
+        }
+
+
+        function onResize() {
+            if (!canvasContainer) return;
+            var w = canvasContainer.clientWidth; const H = canvasContainer.clientHeight;
+            if (H === 0) H = 1; 
+            camera.aspect = w / H;
+            camera.updateProjectionMatrix();
+            renderer.setSize(w, H);
+            updCam();
+        }
+
+        function updCam() {
+            phi=Math.min(179, Math.max(1, phi)); rad=Math.min(250, Math.max(10, rad));
+            camera.position.setFromSphericalCoords(rad, phi*0.01745, theta*0.01745).add(TGT);
+            camera.lookAt(TGT);
+        }
+        
+        function setCameraView(azimuth, polar, distance) {
+            theta = azimuth;
+            phi = polar;
+            rad = distance;
+            updCam();
+        }
+
+
+        function updateSimControls() {
+            DT_FACTOR = parseFloat($('i-dt').value);
+            VISCOSITY = parseFloat($('i-vis').value);
+            $('l-dt').innerText = DT_FACTOR.toFixed(1);
+            $('l-vis').innerText = VISCOSITY.toFixed(3);
+
+            GLOBAL_DEN_ABSORPTION = parseFloat($('i-gden-abs').value);
+            GLOBAL_DEN_REFRACTION = parseFloat($('i-gden-ref').value);
+            $('l-gden-abs').innerText = GLOBAL_DEN_ABSORPTION.toFixed(3);
+            $('l-gden-ref').innerText = GLOBAL_DEN_REFRACTION.toFixed(2);
+        }
+
+        function togglePlayPause() {
+             IS_PAUSED = !IS_PAUSED;
+        }
+
+        function toggleExpand(header) {
+            const targetId = header.dataset.target;
+            const targetContent = $(targetId);
+            const arrow = header.querySelector('.expand-arrow');
+
+            if (targetContent) {
+                const isExpanded = targetContent.classList.toggle('expanded');
+                if (arrow) {
+                    arrow.style.transform = isExpanded ? 'rotate(90deg)' : 'rotate(0deg)';
+                }
+            }
+        }
+        
+        function getExpansionState() {
+             const state = {};
+             document.querySelectorAll('.expandable-header').forEach(header => {
+                 const targetId = header.dataset.target;
+                 if (targetId) {
+                     const targetContent = $(targetId);
+                     state[targetId] = targetContent ? targetContent.classList.contains('expanded') : false;
+                 }
+             });
+             return state;
+         }
+
+         function restoreExpansionState(state) {
+             if (!state) return;
+
+             document.querySelectorAll('.expandable-header').forEach(header => {
+                 const targetId = header.dataset.target;
+                 const targetContent = $(targetId);
+                 const arrow = header.querySelector('.expand-arrow');
+
+                 if (targetContent && state[targetId] !== undefined) {
+                     if (state[targetId]) {
+                         targetContent.classList.add('expanded');
+                         if (arrow) arrow.style.transform = 'rotate(90deg)';
+                     } else {
+                         targetContent.classList.remove('expanded');
+                         if (arrow) arrow.style.transform = 'rotate(0deg)';
+                     }
+                 }
+             });
+         }
+
+
+        function defL(id) {
+            let config = { ...BASE_LAYER_CFG };
+            
+            if (IS_3D_MODE) {
+                config.visMode = 'POINTS';
+                config.shadingMode = BASE_LAYER_CFG.volShadingMode;
+                config.gradientStops = BASE_LAYER_CFG.volGradientStops;
+                config.gradientBias = BASE_LAYER_CFG.volGradientBias;
+                config.gradientContrast = BASE_LAYER_CFG.volGradientContrast;
+                config.pointFalloff = BASE_LAYER_CFG.pointFalloff;
+            } else {
+                 config.visMode = 'MESH';
+                 config.shadingMode = BASE_LAYER_CFG.shadingMode;
+                 config.gradientStops = BASE_LAYER_CFG.gradientStops;
+                 config.gradientBias = BASE_LAYER_CFG.gradientBias;
+                 config.gradientContrast = BASE_LAYER_CFG.gradientContrast;
+                 config.pointFalloff = BASE_LAYER_CFG.pointFalloff;
+            }
+
+            return {
+                id: id, name: IS_3D_MODE ? `Slice ${id}` : `Layer ${id+1}`, 
+                C: config.C, D: config.D, K: config.K, 
+                vis: true, intr: id===0 || IS_3D_MODE, bnd: 'FIXED', 
+                visMode: config.visMode, shadingMode: config.shadingMode, 
+                formulaKey: config.formulaKey,
+                gradientBias: config.gradientBias, gradientContrast: config.gradientContrast, 
+                gradientStops: config.gradientStops.map(arr => [...arr]), 
+                pointSize: config.pointSize,
+                pointScaleFactor: config.pointScaleFactor,
+                pointFalloff: config.pointFalloff,
+                C_label: FORMULA_PRESETS[config.formulaKey].C_label, 
+                D_label: FORMULA_PRESETS[config.formulaKey].D_label,
+            };
+        }
+
+        function addLayer() {
+            const expansionState = getExpansionState();
+            if (layers.length >= (IS_3D_MODE ? 100 : 8)) return;
+            var newId = layerCounter++;
+            layers.push(defL(newId));
+            u.push(new Float32Array(GRID*GRID));
+            u_prev.push(new Float32Array(GRID*GRID));
+            den.push(new Float32Array(GRID*GRID));
+            syncM(); 
+            updateLayerListUI();
+            restoreExpansionState(expansionState);
+            renderCouplingMatrixUI(); 
+        }
+
+        function removeLayer() {
+            const expansionState = getExpansionState();
+            if (layers.length <= 1) return;
+            var idxToRemove = layers.length - 1;
+            emits = emits.filter(e => e.lIdx !== idxToRemove); 
+            layers.pop(); u.pop(); u_prev.pop(); den.pop();
+            
+            GLOBAL_COUPLING_LINKS = GLOBAL_COUPLING_LINKS
+                .filter(link => link.sourceIdx !== idxToRemove && link.targetIdx !== idxToRemove)
+                .map(link => ({
+                    ...link,
+                    sourceIdx: link.sourceIdx > idxToRemove ? link.sourceIdx - 1 : link.sourceIdx,
+                    targetIdx: link.targetIdx > idxToRemove ? link.targetIdx - 1 : link.targetIdx
+                }));
+            
+            syncM(); syncE(); 
+            updateLayerListUI();
+            restoreExpansionState(expansionState);
+            renderCouplingMatrixUI(); 
+        }
+        
+        function resetDensity() {
+            den.forEach(d => d.fill(0));
+            syncM();
+        }
+
+        function resetGlobalDensity() {
+            GLOBAL_DEN.fill(0);
+            syncM();
+        }
+
+        function resetViewSettings() {
+             fullResetConfig(DEFAULT_STATE_CONFIG);
+        }
+        
+        function sdBox(p, b) {
+            const d = new THREE.Vector2(Math.abs(p.x), Math.abs(p.y)).sub(b);
+            return Math.min(Math.max(d.x, d.y), 0.0) + new THREE.Vector2(Math.max(0.0, d.x), Math.max(0.0, d.y)).length();
+        }
+        function sdEllipse(p, r) {
+            const k1 = p.x / r.x;
+            const k2 = p.y / r.y;
+            return Math.sqrt(k1 * k1 + k2 * k2) - 1.0; 
+        }
+        function sdParabola(p, f, w) {
+            const parabola_y = p.x * p.x / (4 * f);
+            let dist = p.y - parabola_y;
+            if (Math.abs(p.x) > w/2) return Infinity;
+            return dist;
+        }
+        function sdHollowBox(p, b, t) {
+            var outer = sdBox(p, b);
+            var inner = sdBox(p, new THREE.Vector2(Math.max(0, b.x - t), Math.max(0, b.y - t)));
+            return Math.max(outer, -inner);
+        }
+        
+        function mapSDF(i, j, centerI, centerJ, params) {
+            const p = new THREE.Vector2(j - centerJ, i - centerI);
+            let dist = Infinity;
+            
+            if (params.type === 'SLAB') {
+                dist = sdBox(p, new THREE.Vector2(params.width/2, params.height/2));
+            } else if (params.type === 'HOLLOW_BOX') {
+                dist = sdHollowBox(p, new THREE.Vector2(params.width/2, params.height/2), params.thickness);
+            } else if (params.type === 'ELLIPSE') {
+                dist = sdEllipse(p, new THREE.Vector2(params.radiusX, params.radiusY));
+            } else if (params.type === 'PARABOLA') {
+                const pd = sdParabola(p, params.focalLength, params.width);
+                if (Math.abs(p.x) <= params.width/2) {
+                     if (pd <= params.height/2 && pd >= -params.height/2) dist = -1;
+                     else dist = 1;
+                } else dist = 1;
+            } else if (params.type === 'SLITS') {
+                var barrier = sdBox(p, new THREE.Vector2(params.width/2, params.height/2));
+                var spacing = params.spacing; 
+                var n = Math.floor(params.slitCount);
+                var slitW = params.slitWidth;
+                var totalSpan = (n * slitW) + ((n - 1) * spacing);
+                var startX = -totalSpan / 2 + slitW / 2;
+                var slitsDist = 10000;
+                for(var k=0; k<n; k++) {
+                     var slitCenter = new THREE.Vector2(startX + k * (slitW + spacing), 0); 
+                     var slitBox = sdBox(p.clone().sub(slitCenter), new THREE.Vector2(slitW/2, params.height/2 + 2)); 
+                     slitsDist = Math.min(slitsDist, slitBox);
+                }
+                dist = Math.max(barrier, -slitsDist);
+            }
+            return dist < 0 ? params.density : 0;
+        }
+
+        function getSDFParams() {
+             return {
+                type: $('sdf-type').value,
+                density: parseFloat($('i-sdf-den').value),
+                width: parseFloat($('sdf-w')?.value || currentSDFParams.width),
+                height: parseFloat($('sdf-h')?.value || currentSDFParams.height),
+                thickness: parseFloat($('sdf-thickness')?.value || 5),
+                radiusX: parseFloat($('sdf-rx')?.value || currentSDFParams.radiusX),
+                radiusY: parseFloat($('sdf-ry')?.value || currentSDFParams.radiusY),
+                focalLength: parseFloat($('sdf-f')?.value || currentSDFParams.focalLength),
+                slitCount: parseFloat($('sdf-slitCount')?.value || currentSDFParams.slitCount),
+                slitWidth: parseFloat($('sdf-slitWidth')?.value || currentSDFParams.slitWidth),
+                spacing: parseFloat($('sdf-spacing')?.value || currentSDFParams.spacing)
+            };
+        }
+
+        function placeShape(centerI, centerJ, layerIndex) {
+            var p = getSDFParams();
+            
+            const centerLayer = IS_3D_MODE ? Math.floor(layers.length / 2) : layerIndex;
+            
+            const L_START = IS_3D_MODE ? 0 : centerLayer;
+            const L_END = IS_3D_MODE ? layers.length : centerLayer + 1;
+
+            const finalCenterI = IS_3D_MODE ? GRID/2 : centerI;
+            const finalCenterJ = IS_3D_MODE ? GRID/2 : centerJ;
+            
+            const isGlobalStamp = !IS_3D_MODE && layerIndex === -1;
+            
+            for (let r=0; r<GRID; r++) {
+                for (let c=0; c<GRID; c++) {
+                    var d = mapSDF(r, c, finalCenterI, finalCenterJ, p);
+                    var idx = r * GRID + c;
+                    
+                    if (isGlobalStamp) {
+                        if (d > 0) {
+                            if (SDF_STAMP_MODE === 'REPLACE') GLOBAL_DEN[idx] = d;
+                            else if (SDF_STAMP_MODE === 'ADD') GLOBAL_DEN[idx] = Math.min(1.0, GLOBAL_DEN[idx] + d);
+                        }
+                    } else {
+                        for (let L = L_START; L < L_END; L++) {
+                            if (d > 0) {
+                                if (SDF_STAMP_MODE === 'REPLACE') den[L][idx] = d;
+                                else if (SDF_STAMP_MODE === 'ADD') den[L][idx] = Math.min(1.0, den[L][idx] + d);
+                            }
+                        }
+                    }
+                }
+            }
+            syncM();
+        }
+
+        function renderSDFPreview() {
+            const cvs = $('sdf-preview'), ctx = cvs.getContext('2d');
+            const W = cvs.width, H = cvs.height, SZ = W/GRID;
+            ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+            var p = getSDFParams();
+            for(let i=0; i<GRID; i++) {
+                for(let j=0; j<GRID; j++) {
+                    var d = mapSDF(i, j, GRID/2, GRID/2, p);
+                    if(d > 0) {
+                        ctx.fillStyle = `rgba(100,180,255,${d*0.9+0.1})`;
+                        ctx.fillRect(j*SZ, i*SZ, SZ, SZ);
+                    }
+                }
+            }
+            ctx.strokeStyle='#555'; ctx.beginPath(); ctx.moveTo(W/2,0); ctx.lineTo(W/2,H); ctx.moveTo(0,H/2); ctx.lineTo(W,H/2); ctx.stroke();
+            $('l-sdf-den').innerText = parseFloat($('i-sdf-den').value).toFixed(2);
+            currentSDFParams.density = parseFloat($('i-sdf-den').value);
+        }
+
+        function updateSDFControls() {
+            const type = $('sdf-type').value;
+            const d = $('sdf-dynamic-controls'); d.innerHTML = '';
+            const DEFS = {
+                SLAB: [{n:'Width', id:'w', min:1, max:GRID, def:40}, {n:'Height', id:'h', min:1, max:GRID, def:20}],
+                HOLLOW_BOX: [{n:'Width', id:'w', min:5, max:GRID, def:40}, {n:'Height', id:'h', min:5, max:GRID, def:20}, {n:'Thick', id:'thickness', min:1, max:20, def:5}],
+                ELLIPSE: [{n:'Rad X', id:'rx', min:1, max:GRID/2, def:30}, {n:'Rad Y', id:'ry', min:1, max:GRID/2, def:15}, {n:'Thickness', id:'thickness', min:1, max:10, def:2}],
+                PARABOLA: [{n:'Width', id:'w', min:10, max:GRID, def:40}, {n:'Focal', id:'f', min:1, max:50, def:10}, {n:'Depth', id:'d', min:1, max:30, def:5}],
+                SLITS: [{n:'Width', id:'w', min:10, max:GRID, def:60}, {n:'Height', id:'h', min:1, max:20, def:4}, {n:'Slits', id:'slitCount', min:1, max:10, def:3}, {n:'Slit Gap', id:'slitWidth', min:1, max:10, def:4}, {n:'Spacing', id:'spacing', min:1, max:20, def:10}]
+            };
+            
+            let commonDefs = DEFS[type] || [];
+            
+            commonDefs.forEach(p => {
+                var lbl = document.createElement('label'); 
+                var val = document.createElement('span'); 
+                lbl.innerText = p.n + ': ';
+                val.classList.add('value-label');
+
+                var inp = document.createElement('input'); 
+                inp.type='range'; 
+                inp.id='sdf-'+p.id; 
+                inp.min=p.min; 
+                inp.max=p.max; 
+                inp.step=(p.max-p.min > 50) ? 1 : 0.5;
+                
+                let propName;
+                if (p.id === 'w') propName = 'width';
+                else if (p.id === 'h') propName = 'height';
+                else if (p.id === 'rx') propName = 'radiusX';
+                else if (p.id === 'ry') propName = 'radiusY';
+                else if (p.id === 'f') propName = 'focalLength';
+                else if (p.id === 'thickness') propName = 'thickness';
+                else if (p.id === 'slitCount') propName = 'slitCount';
+                else if (p.id === 'slitWidth') propName = 'slitWidth';
+                else if (p.id === 'spacing') propName = 'spacing';
+                else if (p.id === 'd') propName = 'height';
+
+                inp.value = currentSDFParams[propName] || p.def;
+                val.innerText = inp.value;
+                
+                
+                inp.classList.add('custom-drag-slider');
+
+                d.appendChild(lbl); lbl.appendChild(val); d.appendChild(inp);
+                
+                inp.oninput = (function(prop, valSpan) {
+                     return function(e) {
+                         currentSDFParams[prop] = parseFloat(e.target.value);
+                         valSpan.innerText = e.target.value;
+                         renderSDFPreview();
+                         updateStampPreview();
+                     };
+                })(propName, val);
+                
+            });
+            
+            $('i-sdf-den').oninput = (e) => { 
+                $('l-sdf-den').innerText = parseFloat(e.target.value).toFixed(2); 
+                renderSDFPreview(); 
+                currentSDFParams.density = parseFloat(e.target.value);
+                updateStampPreview();
+            };
+            
+            renderSDFPreview();
+            updateStampPreview();
+        }
+
+        function setupSDFMenuHandlers() {
+            $('sdf-type').onchange = updateSDFControls;
+            
+            $('i-sdf-den').classList.add('custom-drag-slider');
+            
+            $('i-sdf-den').oninput = (e) => { 
+                $('l-sdf-den').innerText = parseFloat(e.target.value).toFixed(2); 
+                renderSDFPreview(); 
+                currentSDFParams.density = parseFloat(e.target.value);
+            };
+
+            EV('sdf-mode-toggle', 'change', (e) => {
+                SDF_STAMP_MODE = e.target.value;
+            });
+
+            $('sdf-close').onclick = () => { 
+                $('sdf-menu').style.display = 'none'; 
+                scene.remove(stampPreviewMesh);
+                stampPreviewMesh = null;
+            };
+            updateSDFControls();
+        }
+        
+        function updateStampPreview() {
+            if (stampPreviewMesh) {
+                scene.remove(stampPreviewMesh);
+                stampPreviewMesh.geometry.dispose();
+                stampPreviewMesh.material.dispose();
+            }
+
+            if (brush !== 'SDF_PLACE' || $('sdf-menu').style.display === 'none') return;
+            
+            const centerI = IS_3D_MODE ? GRID/2 : sdfPlacementGrid.i;
+            const centerJ = IS_3D_MODE ? GRID/2 : sdfPlacementGrid.j;
+            
+            let targetLayers = [];
+            if (IS_3D_MODE) {
+                targetLayers.push(Math.floor(layers.length / 2));
+            } else {
+                const activeLayerIndex = layers.findIndex(l => l.intr);
+                if (activeLayerIndex !== -1) {
+                    targetLayers.push(activeLayerIndex);
+                } else if (sdfPlacementGrid.lIdx !== undefined) {
+                    targetLayers.push(sdfPlacementGrid.lIdx);
+                }
+            }
+            
+            if (targetLayers.length === 0) return;
+
+            const geometry = new THREE.BufferGeometry();
+            const positions = [];
+            const colors = [];
+            const p = getSDFParams();
+            const color = new THREE.Color(0x68b2f0);
+            
+            targetLayers.forEach(layerIndex => {
+                for(let r=0; r<GRID; r++) {
+                    for(let c=0; c<GRID; c++) {
+                        var d = mapSDF(r, c, centerI, centerJ, p);
+                        if (d > 0.01) { 
+                            const worldPos = gtw(r, c, layerIndex);
+                            worldPos.y += 0.01; 
+                            positions.push(worldPos.x, worldPos.y, worldPos.z);
+                            colors.push(color.r, color.g, color.b);
+                        }
+                    }
+                }
+            });
+
+            if (positions.length > 0) {
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+                
+                const material = new THREE.PointsMaterial({
+                    size: 0.5, 
+                    vertexColors: true, 
+                    sizeAttenuation: true,
+                    transparent: true,
+                    opacity: 0.8
+                });
+                
+                stampPreviewMesh = new THREE.Points(geometry, material);
+                stampPreviewMesh.name = 'SDF_PREVIEW';
+                scene.add(stampPreviewMesh);
+            }
+        }
+        
+        function updTr() { 
+            const totalHeight = (layers.length - 1) * GAP * 0.1;
+            const centerYOffset = IS_3D_MODE ? totalHeight / 2 : 0;
+            
+            const volVis = BASE_LAYER_CFG; 
+
+            meshes.forEach((m,i) => { 
+                m.position.y = centerYOffset - (i * GAP * 0.1);
+                
+                if(m.material.uniforms) {
+                    const l = layers[i]; 
+                    
+                    const sourceL = IS_3D_MODE ? volVis : l; 
+                    const stops = IS_3D_MODE ? sourceL.volGradientStops : sourceL.gradientStops;
+
+                    var cols = [];
+                    for (let j=0; j<MAX_GRADIENT_STOPS; j++) {
+                        let c = stops[Math.min(j, stops.length-1)];
+                        cols.push(new THREE.Color(c[0]/255, c[1]/255, c[2]/255));
+                    }
+                    
+                    m.material.uniforms.SHADING_MODE.value = ['SPECULAR', 'HEIGHT', 'VELOCITY', 'ENERGY', 'DIVERGENCE', 'VECTOR_RGB'].indexOf(IS_3D_MODE ? sourceL.volShadingMode : sourceL.shadingMode);
+                    m.material.uniforms.GRADIENT_STOPS.value = uniformsArray(cols);
+                    m.material.uniforms.GRADIENT_STOPS_COUNT.value = stops.length;
+                    m.material.uniforms.GRADIENT_BIAS.value = IS_3D_MODE ? sourceL.volGradientBias : sourceL.gradientBias;
+                    m.material.uniforms.GRADIENT_CONTRAST.value = IS_3D_MODE ? sourceL.volGradientContrast : sourceL.gradientContrast;
+                    m.material.uniforms.VIS_MIN.value = visMin;
+                    m.material.uniforms.VIS_MAX.value = visMax;
+                    m.material.uniforms.uPointSize.value = l.pointSize;
+                    m.material.uniforms.uPointScaleFactor.value = l.pointScaleFactor;
+                    m.material.uniforms.uPointFalloff.value = l.pointFalloff;
+                }
+            }); 
+        }
+
+        function setupDragPlane(emitterMesh, hitPoint) {
+            if (!emitterMesh) return;
+
+            const cameraRay = camera.position.clone().sub(TGT).normalize();
+            dragPlane.setFromNormalAndCoplanarPoint(cameraRay, emitterMesh.position);
+
+            dragStartOffset.copy(hitPoint).sub(emitterMesh.position);
+
+            const planeGeometry = new THREE.PlaneGeometry(100, 100);
+            const planeMaterial = new THREE.MeshBasicMaterial({
+                color: 0x68b2f0,
+                transparent: true,
+                opacity: 0.15,
+                side: THREE.DoubleSide
+            });
+        }
+
+        function syncM() {
+            meshes.forEach(m=>scene.remove(m)); meshes = [];
+            var volOpacity = parseFloat($('i-vo').value);
+            
+            const vizCfg = BASE_LAYER_CFG;
+            
+            layers.forEach((l, i) => {
+                var g = new THREE.PlaneGeometry(50, 50, GRID-1, GRID-1).rotateX(-Math.PI/2);
+                
+                const source = IS_3D_MODE ? vizCfg : l;
+                const stops = IS_3D_MODE ? source.volGradientStops : source.gradientStops;
+                
+                var cols = [];
+                for (let j=0; j<MAX_GRADIENT_STOPS; j++) {
+                    let c = stops[Math.min(j, stops.length-1)];
+                    cols.push(new THREE.Color(c[0]/255, c[1]/255, c[2]/255));
+                }
+                var uforms = { 
+                    SUN_DIR:{value:sunDir}, LIGHT_INTENSITY:{value:lInt}, TIME:{value:0}, 
+                    SHADING_MODE: {value: ['SPECULAR', 'HEIGHT', 'VELOCITY', 'ENERGY', 'DIVERGENCE', 'VECTOR_RGB'].indexOf(IS_3D_MODE ? source.volShadingMode : source.shadingMode)},
+                    GRADIENT_BIAS: {value: IS_3D_MODE ? source.volGradientBias : source.gradientBias}, 
+                    GRADIENT_CONTRAST: {value: IS_3D_MODE ? source.volGradientContrast : source.gradientContrast},
+                    GRADIENT_STOPS: {value: uniformsArray(cols)}, 
+                    GRADIENT_STOPS_COUNT: {value: stops.length},
+                    VIS_MIN: {value: visMin}, VIS_MAX: {value: visMax},
+                    uIsPoints: {value: l.visMode === 'POINTS'},
+                    uPointSize: {value: l.pointSize},
+                    uIs3D: {value: IS_3D_MODE},
+                    uPointScaleFactor: {value: l.pointScaleFactor},
+                    uPointFalloff: {value: l.pointFalloff},
+                    uOpacity: {value: volOpacity},
+                    uIs3DPoints: {value: IS_3D_MODE && l.visMode === 'POINTS'} 
+                };
+                
+                g.setAttribute('waveHeight', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count), 1));
+                g.setAttribute('waveVelocity', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count), 1));
+                g.setAttribute('aDensity', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count), 1));
+                
+                var blending = (IS_3D_MODE && l.visMode === 'POINTS') ? THREE.AdditiveBlending : THREE.NormalBlending;
+                var depthWrite = !IS_3D_MODE;
+                
+                var m = new THREE.ShaderMaterial({
+                    uniforms: uforms,
+                    vertexShader: `
+                        varying vec3 vNormal; attribute float waveHeight; attribute float waveVelocity; attribute float aDensity; 
+                        varying float vWaveHeight; varying float vWaveVelocity; varying float vDensity; 
+                        uniform bool uIsPoints; uniform float uPointSize; uniform bool uIs3D; uniform float uPointScaleFactor;
+                        uniform bool uIs3DPoints;
+                        void main(){ 
+                            vNormal=normalize(normalMatrix*normal); 
+                            vWaveHeight=waveHeight; vWaveVelocity=waveVelocity; vDensity=aDensity; 
+                            
+                            vec4 position_offset = vec4(position, 1.0);
+                            
+                            if (!uIs3DPoints) { 
+                                position_offset.y += waveHeight * 2.0 * ${ZSC*0.05}; 
+                            }
+                            
+                            vec4 mvPosition = modelViewMatrix*position_offset;
+                            gl_Position=projectionMatrix*mvPosition;
+                            
+                            if (uIsPoints) {
+                                float amp = smoothstep(0.0, 1.0, abs(waveHeight));
+                                float base = uIs3D ? 4.0 : 5.0;
+                                gl_PointSize = uPointSize * (1.0 + amp * uPointScaleFactor); 
+                                gl_PointSize *= (300.0 / -mvPosition.z); 
+                            }
+                        }`,
+                    fragmentShader: defaultFs, transparent: true, side: 2,
+                    blending: blending, depthWrite: depthWrite
+                });
+
+                let mesh;
+                if (l.visMode === 'MESH' && !IS_3D_MODE) {
+                     mesh = new THREE.Mesh(g, m);
+                } else {
+                     mesh = new THREE.Points(g, m);
+                }
+                mesh.userData = {lid:l.id, idx:i, visMode: l.visMode};
+                
+                scene.add(mesh); meshes.push(mesh);
+            });
+            updTr(); syncE();
+        }
+
+        function syncE() {
+            emitMeshes.forEach(m=>scene.remove(m)); emitMeshes = [];
+            emits.forEach(e => {
+                var wPos = gtw(e.i, e.j, e.lIdx);
+
+                var col = (e.type==='EMITTER'||e.shp!=='STATIC')?0x00aaff:0xff3333;
+                var sphereColor = e.id === selectedEmitterId ? 0xffff00 : col;
+
+                if (e.geo === 'LINE') {
+                    var wPos2 = gtw(e.i2, e.j2, e.lIdx);
+
+                    var gS = new THREE.SphereGeometry(1, 16, 16);
+                    var mS = new THREE.Mesh(gS, new THREE.MeshBasicMaterial({color: sphereColor, transparent:true, opacity:0.8}));
+                    mS.position.set(wPos.x, wPos.y + 0.5, wPos.z);
+                    mS.userData = {eid:e.id, type:e.type, lIdx:e.lIdx, part:'START'};
+                    scene.add(mS); emitMeshes.push(mS);
+
+                    var gE = new THREE.SphereGeometry(1, 16, 16);
+                    var mE = new THREE.Mesh(gE, new THREE.MeshBasicMaterial({color: sphereColor, transparent:true, opacity:0.8}));
+                    mE.position.set(wPos2.x, wPos2.y + 0.5, wPos2.z);
+                    mE.userData = {eid:e.id, type:e.type, lIdx:e.lIdx, part:'END'};
+                    scene.add(mE); emitMeshes.push(mE);
+
+                    var vec = new THREE.Vector3().subVectors(wPos2, wPos);
+                    var dist = vec.length();
+                    var gL = new THREE.CylinderGeometry(0.3, 0.3, dist, 8);
+                    gL.rotateX(Math.PI/2);
+                    var mL = new THREE.Mesh(gL, new THREE.MeshBasicMaterial({color: 0xffffff, transparent:true, opacity:0.6}));
+                    mL.position.copy(wPos).add(vec.multiplyScalar(0.5));
+                    mL.position.y += 0.5;
+                    mL.lookAt(new THREE.Vector3(wPos2.x, mL.position.y, wPos2.z));
+                    mL.userData = {eid:e.id, type:e.type, lIdx:e.lIdx, part:'BODY'};
+                    scene.add(mL); emitMeshes.push(mL);
+
+                } else {
+                    var g = new THREE.SphereGeometry(1, 16, 16);
+                    var m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({color: sphereColor, transparent:true, opacity:0.8}));
+                    m.position.set(wPos.x, wPos.y + 0.5, wPos.z);
+                    m.userData = {eid:e.id, type:e.type, lIdx:e.lIdx, part:'BODY'};
+                    scene.add(m); emitMeshes.push(m);
+                }
+            });
+        }
+
+function sim() {
+    if (!layers.length) return;
+    var N = GRID;
+    var u_n = u.map(arr => new Float32Array(arr));
+    var newD = layers.map((_, l) => den[l]);
+    den = newD;
+
+    TIME++;
+    var DT2 = DT_FACTOR * DT_FACTOR;
+    var DT = DT_FACTOR;
+
+    emits.forEach(e => {
+        var phase = (TIME + e.off) * (2 * Math.PI / e.rt);
+        var val = 0;
+        if (e.shp === 'STATIC') val = e.st;
+        else if (e.shp === 'SINE') val = e.st * Math.sin(phase);
+        else if (e.shp === 'COSINE') val = e.st * Math.cos(phase);
+        else if (e.shp === 'SQUARE') val = e.st * Math.sign(Math.sin(phase));
+        else if (e.shp === 'SAW') val = e.st * (2 * ((TIME + e.off) / e.rt % 1) - 1);
+        else if (e.shp === 'NOISE') val = e.st * (Math.random() * 2 - 1);
+
+        if (e.geo === 'LINE') {
+            const linePoints = bresenhamLine(e.i, e.j, e.i2, e.j2);
+            if (linePoints.length > 0) {
+                const energyPerPoint = val / linePoints.length;
+                linePoints.forEach(p => {
+                    var idx = p.i * N + p.j;
+                    if (e.st >= 0) u[e.lIdx][idx] += (energyPerPoint - u[e.lIdx][idx]) * 0.5;
+                    else {
+                        var damping = Math.min(1.0, Math.abs(e.st) * 0.05 / linePoints.length);
+                        u[e.lIdx][idx] *= (1.0 - damping);
+                        u_prev[e.lIdx][idx] *= (1.0 - damping);
+                    }
+                });
+            }
+        } else {
+            var idx = e.i * N + e.j;
+            if (e.st >= 0) u[e.lIdx][idx] += (val - u[e.lIdx][idx]) * 0.5;
+            else {
+                var damping = Math.min(1.0, Math.abs(e.st) * 0.05);
+                u[e.lIdx][idx] *= (1.0 - damping);
+                u_prev[e.lIdx][idx] *= (1.0 - damping);
+            }
+        }
+    });
+
+    var volK = 0.0;
+    var effC = BASE_LAYER_CFG.C;
+    var effD = BASE_LAYER_CFG.D;
+
+    if (IS_3D_MODE && $('cb-iso').checked) {
+        var visualWidth = 50.0;
+        var visualGap = GAP * 0.1;
+        var dx = visualWidth / (GRID - 1);
+        var dz = visualGap;
+        if (dz < 0.001) dz = 0.001;
+        var ratioSq = (dx * dx) / (dz * dz);
+        volK = effC * ratioSq;
+    } else if (IS_3D_MODE) {
+        volK = BASE_LAYER_CFG.K;
+    }
+
+    const layerCouplingContributions = new Array(layers.length).fill(0).map(() => new Float32Array(GRID * GRID));
+
+    if (!IS_3D_MODE) {
+        GLOBAL_COUPLING_LINKS.forEach(link => {
+            if (link.sourceIdx < layers.length && link.targetIdx < layers.length && link.sourceIdx !== link.targetIdx) {
+                const sourceU = u[link.sourceIdx];
+                const rate = link.rate;
+                const targetProp = link.targetProperty;
+
+                for (let ptr = 0; ptr < N * N; ptr++) {
+                    let sourceValue = 0;
+                    if (targetProp === 'AMPLITUDE') {
+                        sourceValue = sourceU[ptr];
+                    } else if (targetProp === 'VELOCITY') {
+                        sourceValue = sourceU[ptr] - u_prev[link.sourceIdx][ptr];
+                    }
+
+                    const targetU = u[link.targetIdx][ptr];
+                    layerCouplingContributions[link.targetIdx][ptr] += rate * (sourceValue - targetU);
+                }
+            }
+        });
+    }
+
+    layers.forEach((l, idx) => {
+        var finalC = IS_3D_MODE ? effC : l.C;
+        var finalD = IS_3D_MODE ? effD : l.D;
+        var effBnd = IS_3D_MODE ? l.bnd : l.bnd;
+
+        for (let i = 1; i < N - 1; i++) {
+            for (let j = 1; j < N - 1; j++) {
+                var ptr = i * N + j;
+
+                var localDensity = den[idx][ptr];
+                var globalDensity = GLOBAL_DEN[ptr];
+
+                if (localDensity > 0.99) {
+                    u_n[idx][ptr] = u[idx][ptr];
+                    continue;
+                }
+
+                var U_CURR = u[idx][ptr];
+                var U_PREV = u_prev[idx][ptr];
+
+                var lap = u[idx][ptr + 1] + u[idx][ptr - 1] + u[idx][ptr + N] + u[idx][ptr - N] - 4 * U_CURR;
+
+                var U_BELOW = (idx > 0) ? u[idx - 1][ptr] : U_CURR;
+                var U_ABOVE = (idx < layers.length - 1) ? u[idx + 1][ptr] : U_CURR;
+
+                var C_density = localDensity > 0 ? finalC * Math.max(0.001, 1 - localDensity) : finalC;
+
+                var C_global_refract = globalDensity > 0 ? 1.0 + (globalDensity * (GLOBAL_DEN_REFRACTION - 1.0)) : 1.0;
+                var C_final = C_density / C_global_refract;
+
+                var D_global_absorb = globalDensity > 0 ? GLOBAL_DEN_ABSORPTION * globalDensity : 0.0;
+                var D_final = finalD + D_global_absorb;
+
+                var COUPLING_TERM = 0;
+
+                if (IS_3D_MODE) {
+                    COUPLING_TERM = volK * (U_ABOVE + U_BELOW - 2 * U_CURR);
+                } else {
+                    const K_BELOW = (idx > 0) ? layers[idx - 1].K : 0;
+                    const K_CURR = l.K;
+                    COUPLING_TERM = K_BELOW * (U_BELOW - U_CURR) + K_CURR * (U_ABOVE - U_CURR);
+                }
+
+                var EXTERNAL_COUPLING_TERM = layerCouplingContributions[idx][ptr] || 0;
+
+                var val;
+
+                if (l.formulaKey === 'WAVE') {
+                    val = 2 * U_CURR - U_PREV +
+                        C_final * lap * DT2 -
+                        D_final * (U_CURR - U_PREV) +
+                        COUPLING_TERM * DT_FACTOR +
+                        EXTERNAL_COUPLING_TERM * DT_FACTOR;
+                } else if (l.formulaKey === 'DIFFUSION') {
+                    val = U_CURR +
+                        C_final * lap * DT_FACTOR -
+                        D_final * U_CURR * DT_FACTOR +
+                        COUPLING_TERM * DT_FACTOR +
+                        EXTERNAL_COUPLING_TERM * DT_FACTOR;
+                } else if (l.formulaKey === 'REACTION') {
+                    const F = l.C;
+                    const k = l.D;
+                    const du = lap;
+                    val = U_CURR + DT_FACTOR * (C_final * du - F * U_CURR + k * (1.0 - U_CURR)) +
+                        COUPLING_TERM * DT_FACTOR +
+                        EXTERNAL_COUPLING_TERM * DT_FACTOR;
+                } else {
+                    val = 2 * U_CURR - U_PREV +
+                        C_final * lap * DT2 -
+                        D_final * (U_CURR - U_PREV) +
+                        COUPLING_TERM * DT_FACTOR +
+                        EXTERNAL_COUPLING_TERM * DT_FACTOR;
+                }
+
+                val -= (val - U_CURR) * VISCOSITY;
+
+                if (val > 20) val = 20 + (val - 20) * 0.1;
+                if (val < -20) val = -20 + (val + 20) * 0.1;
+                u_n[idx][ptr] = val;
+            }
+        }
+
+        if (effBnd === 'ABSORBING') {
+            const S = Math.sqrt(finalC) * DT_FACTOR;
+            const murCoeff = (S - 1.0) / (S + 1.0);
+
+            for (let k = 1; k < N - 1; k++) {
+                let ptrTop = k;
+                let ptrTopNeigh = ptrTop + N;
+                u_n[idx][ptrTop] = u[idx][ptrTopNeigh] + murCoeff * (u_n[idx][ptrTopNeigh] - u[idx][ptrTop]);
+
+                let ptrBot = (N - 1) * N + k;
+                let ptrBotNeigh = ptrBot - N;
+                u_n[idx][ptrBot] = u[idx][ptrBotNeigh] + murCoeff * (u_n[idx][ptrBotNeigh] - u[idx][ptrBot]);
+
+                let ptrLeft = k * N;
+                let ptrLeftNeigh = ptrLeft + 1;
+                u_n[idx][ptrLeft] = u[idx][ptrLeftNeigh] + murCoeff * (u_n[idx][ptrLeftNeigh] - u[idx][ptrLeft]);
+
+                let ptrRight = k * N + N - 1;
+                let ptrRightNeigh = ptrRight - 1;
+                u_n[idx][ptrRight] = u[idx][ptrRightNeigh] + murCoeff * (u_n[idx][ptrRightNeigh] - u[idx][ptrRight]);
+            }
+
+            u_n[idx][0] = (u_n[idx][1] + u_n[idx][N]) * 0.5;
+            u_n[idx][N - 1] = (u_n[idx][N - 2] + u_n[idx][2 * N - 1]) * 0.5;
+            u_n[idx][(N - 1) * N] = (u_n[idx][(N - 1) * N + 1] + u_n[idx][(N - 2) * N]) * 0.5;
+            u_n[idx][N * N - 1] = (u_n[idx][N * N - 2] + u_n[idx][(N - 1) * N - 1]) * 0.5;
+
+        } else {
+            for (let k = 0; k < N; k++) {
+                u_n[idx][k] = 0;
+                u_n[idx][(N - 1) * N + k] = 0;
+                u_n[idx][k * N] = 0;
+                u_n[idx][k * N + N - 1] = 0;
+            }
+        }
+    });
+    u_prev = u;
+    u = u_n;
+}
+
+
+
+
+
+        function loop() {
+            requestAnimationFrame(loop);
+            
+            const toggleBtn = $('btn-toggle-play');
+            if (IS_PAUSED) {
+                toggleBtn.textContent = 'Play';
+                toggleBtn.style.background = '#28a745'; 
+                toggleBtn.style.borderColor = '#28a745';
+            } else {
+                toggleBtn.textContent = 'Pause';
+                toggleBtn.style.background = 'var(--color-warning)'; 
+                toggleBtn.style.borderColor = 'var(--color-warning)';
+                sim();
+            }
+
+            
+            if (isContinuousBrushActive && (brush === 'DISTURBANCE' || brush === 'DENSITY_PAINT')) {
+                 if (activeBrushHit) {
+                     interact(activeBrushHit.i, activeBrushHit.j, activeBrushHit.lIdx);
+                 }
+            }
+            
+            if (brush === 'SDF_PLACE' && $('sdf-menu').style.display === 'block') {
+                 updateStampPreview();
+            }
+
+            
+            meshes.forEach((m, i) => {
+                if(!layers[i]) return; 
+                const l = layers[i];
+                if(!l.vis) { m.visible=false; return; } m.visible=true;
+                
+                var pos = m.geometry.attributes.position.array;
+                var hAttr = m.geometry.attributes.waveHeight.array;
+                var vAttr = m.geometry.attributes.waveVelocity.array;
+                var dAttr = m.geometry.attributes.aDensity.array;
+                
+                const isMeshVis = l.visMode === 'MESH' && !IS_3D_MODE;
+                
+                for(let k=0; k<GRID*GRID; k++) {
+                    hAttr[k] = u[i][k]; 
+                    vAttr[k] = u[i][k] - u_prev[i][k]; 
+                    dAttr[k] = den[i][k];
+                    
+                    if (isMeshVis) {
+                        pos[k*3+1] = u[i][k] * ZSC*0.1; 
+                    }
+                }
+                m.geometry.attributes.waveHeight.needsUpdate = true; 
+                m.geometry.attributes.waveVelocity.needsUpdate = true; 
+                m.geometry.attributes.aDensity.needsUpdate = true;
+                if (isMeshVis) m.geometry.attributes.position.needsUpdate = true; 
+                
+                if(isMeshVis) m.geometry.computeVertexNormals();
+                if(m.material.uniforms) { 
+                    m.material.uniforms.TIME.value = TIME/60; 
+                    m.material.uniforms.SUN_DIR.value = sunDir; 
+                    m.material.uniforms.LIGHT_INTENSITY.value = lInt; 
+                    m.material.uniforms.VIS_MIN.value = visMin;
+                    m.material.uniforms.VIS_MAX.value = visMax;
+                    m.material.uniforms.uPointSize.value = l.pointSize;
+                    m.material.uniforms.uPointScaleFactor.value = l.pointScaleFactor;
+                    m.material.uniforms.uPointFalloff.value = l.pointFalloff;
+                }
+            });
+            updCam();
+            renderer.render(scene, camera);
+        }
+
+        function updateLayerParamUI(layerIndex, prop) {
+            const l = layers[layerIndex];
+            const el = $(`l-${prop}-${l.id}`);
+            if (el) {
+                el.innerText = l[prop].toFixed(prop === 'C' || prop === 'D' || prop === 'K' ? 3 : 1);
+            }
+            if (prop === 'vis') {
+                 const checkbox = $(`layer_vis_checkbox_${l.id}`);
+                 if (checkbox) checkbox.checked = l.vis;
+            }
+            if (prop === 'intr') {
+                 const checkbox = $(`layer_intr_checkbox_${l.id}`);
+                 if (checkbox) checkbox.checked = l.intr;
+            }
+        }
+
+        function updateLayerFormula(layerIndex, key) {
+            const l = layers[layerIndex];
+            const preset = FORMULA_PRESETS[key];
+            
+            l.formulaKey = key;
+            l.C = preset.defaultC;
+            l.D = preset.defaultD;
+            l.C_label = preset.C_label;
+            l.D_label = preset.D_label;
+            
+            updateLayerListUI();
+        }
+        
+        function cast(e) {
+            var mouse = nm(e);
+            raycaster.setFromCamera(mouse, camera);
+            
+            var ems = raycaster.intersectObjects(emitMeshes); 
+            if(ems.length > 0) return {obj:ems[0].object, lIdx: ems[0].object.userData.lIdx, point: ems[0].point};
+            
+            const meshCandidates = meshes.filter(m=>m.visible);
+            
+            var ps = raycaster.intersectObjects(meshCandidates);
+            raycaster.params.Points.threshold = IS_3D_MODE ? 2.0 : 1.0; 
+            
+            if(ps.length) return { ...wtg(ps[0].point.x, ps[0].point.z), lIdx: ps[0].object.userData.idx, point: ps[0].point, face: ps[0].face };
+            return null;
+        }
+
+        
+        function interact(i, j, l) {
+            if (l >= layers.length) return; 
+            
+            
+            if(brush==='EMITTER_PLACE') { 
+                
+                let targetLIdx = l;
+                if (IS_3D_MODE) {
+                    targetLIdx = Math.floor(layers.length / 2);
+                }
+                
+                
+                emits.push({i,j,lIdx:targetLIdx,type:'EMITTER',id:Date.now(),st:1,rt:100,off:0,shp:'STATIC',geo:'POINT',i2:i,j2:j}); 
+                syncE(); 
+                isDrag=false; 
+                return; 
+            }
+
+            const L_CENTER = l < 0 ? 0 : l; 
+            const L_START = IS_3D_MODE ? Math.max(0, L_CENTER - mRad) : L_CENTER;
+            const L_END = IS_3D_MODE ? Math.min(layers.length, L_CENTER + mRad + 1) : L_CENTER + 1;
+            
+            const DX = 50.0 / (GRID - 1);
+            const DZ_LAYER = GAP * 0.1;
+            const Z_SCALE_FACTOR = DX > 0 ? DZ_LAYER / DX : 1.0;
+            
+            const maxDistSq = mRad * mRad; 
+            const isGlobalDensityBrush = brush === 'DENSITY_PAINT' && l === -1;
+            
+            
+            let waveValue = 0;
+            if (brush === 'DISTURBANCE') {
+                if (!IS_3D_MODE && l >= 0 && !layers[L_CENTER].intr) return; 
+
+                if (IS_IMPULSE_HOLD) {
+                    waveValue = getImpulseWaveValue(TIME); 
+                } else {
+                    const timeSincePulse = TIME - pulseStartTime;
+                    if (timeSincePulse < IMPULSE_WAVELENGTH) {
+                         waveValue = getImpulseWaveValue(timeSincePulse);
+                    } else {
+                         waveValue = 0;
+                    }
+                }
+                if (waveValue === 0) return; 
+            }
+
+
+            
+            for(let r=-mRad; r<=mRad; r++) for(let c=-mRad; c<=mRad; c++) {
+                
+                var rr = i+r, cc = j+c;
+                if (rr>=1 && rr<GRID-1 && cc>=1 && cc<GRID-1) {
+                    var idx = rr*GRID+cc;
+                    
+                    
+                    const dist2DSq = r*r + c*c;
+                    
+                    
+                    for (let L = L_START; L < L_END; L++) {
+                        
+                        let distSq;
+                        if (IS_3D_MODE) {
+                            
+                            const dL = L - L_CENTER;
+                            const dL_scaled_sq = (dL * Z_SCALE_FACTOR) * (dL * Z_SCALE_FACTOR);
+                            
+                            distSq = dist2DSq + dL_scaled_sq; 
+                        } else {
+                            
+                            if (L !== L_CENTER) continue; 
+                            distSq = dist2DSq;
+                        }
+                        
+                        
+                        if(distSq <= maxDistSq) { 
+                            
+                            const dist = Math.sqrt(distSq);
+                            const falloff = getBrushFalloff(dist, 1.0); 
+
+                            if(brush === 'DISTURBANCE') { 
+                                var v = IMPULSE_MAGNITUDE * falloff * waveValue;
+                                
+                                if (IS_IMPULSE_HOLD) {
+                                    u[L][idx] = v; 
+                                } else {
+                                    
+                                    u_prev[L][idx] = u[L][idx];
+                                    u[L][idx] += v;
+                                }
+                            }
+                            else if(brush === 'DENSITY_PAINT') { 
+                                let currentDensity = isGlobalDensityBrush ? GLOBAL_DEN[idx] : den[L][idx];
+                                
+                                
+                                if (falloff * DEN_FLOW_RATE > 0) {
+                                    if (DEN_BRUSH_MODE === 'REPLACE') {
+                                        currentDensity = Math.max(0, Math.min(1, currentDensity + (mVal - currentDensity) * falloff * DEN_FLOW_RATE));
+                                    } else if (DEN_BRUSH_MODE === 'ADD') {
+                                         if (mVal > 0) {
+                                            currentDensity = Math.max(0, Math.min(1, currentDensity + mVal * falloff * DEN_FLOW_RATE));
+                                         }
+                                    } else if (DEN_BRUSH_MODE === 'SUBTRACT') {
+                                        if (mVal > 0) {
+                                            currentDensity = Math.max(0, Math.min(1, currentDensity - mVal * falloff * DEN_FLOW_RATE));
+                                        }
+                                    }
+
+                                    if (isGlobalDensityBrush) {
+                                        GLOBAL_DEN[idx] = currentDensity;
+                                    } else {
+                                        
+                                        den[L][idx] = currentDensity;
+                                    }
+                                }
+                            }
+                        }
+                    } 
+                }
+            } 
+            
+            if (brush === 'DENSITY_PAINT') {
+                syncM();
+            }
+        }
+
+        function resizeSim(newGrid) {
+            const expansionState = getExpansionState();
+            if (newGrid === GRID) return;
+            var oldGrid = GRID;
+            GRID = newGrid;
+            $('l-res').innerText = GRID;
+            
+            var newU = [], newUPrev = [], newDen = [];
+            
+            
+            layers.forEach((l, idx) => {
+                var nU = new Float32Array(GRID*GRID);
+                var nUP = new Float32Array(GRID*GRID);
+                var nD = new Float32Array(GRID*GRID);
+                for(let r=0; r<GRID; r++) {
+                    for(let c=0; c<GRID; c++) {
+                        var nr = r / (GRID-1);
+                        var nc = c / (GRID-1);
+                        nU[r*GRID+c] = sampleGrid(u[idx], oldGrid, nr, nc);
+                        nUP[r*GRID+c] = sampleGrid(u_prev[idx], oldGrid, nr, nc);
+                        nD[r*GRID+c] = sampleGrid(den[idx], oldGrid, nr, nc);
+                    }
+                }
+                newU.push(nU); newUPrev.push(nUP); newDen.push(nD);
+            });
+            u = newU; u_prev = newUPrev; den = newDen;
+
+            
+            var newGlobalDen = new Float32Array(GRID*GRID);
+            for(let r=0; r<GRID; r++) {
+                for(let c=0; c<GRID; c++) {
+                    var nr = r / (GRID-1);
+                    var nc = c / (GRID-1);
+                    newGlobalDen[r*GRID+c] = sampleGrid(GLOBAL_DEN, oldGrid, nr, nc);
+                }
+            }
+            GLOBAL_DEN = newGlobalDen;
+            
+            var ratio = (GRID-1) / (oldGrid-1);
+            emits.forEach(e => {
+                e.i = Math.round(e.i * ratio);
+                e.j = Math.round(e.j * ratio);
+                if(e.i2) e.i2 = Math.round(e.i2 * ratio);
+                if(e.j2) e.j2 = Math.round(e.j2 * ratio);
+            });
+
+            syncM();
+            restoreExpansionState(expansionState);
+        }
+
+        function clearSimulation() {
+            emits = emits.filter(e => e.type !== 'EMITTER_LINE_DRAG');
+            u.forEach(arr => arr.fill(0));
+            u_prev.forEach(arr => arr.fill(0));
+            selectedEmitterId = null; 
+            updateEmitterInspector();
+            syncE(); 
+        }
+        
+        function getAppState() {
+            return {
+                global: {
+                    GRID, GAP, ZSC, DT_FACTOR, VISCOSITY, lInt, visMin, visMax,
+                    IS_3D_MODE, VOL_LAYERS,
+                    sunPitch: +$('i-sp').value, sunYaw: +$('i-sy').value,
+                    GLOBAL_DEN_ABSORPTION: GLOBAL_DEN_ABSORPTION,
+                    GLOBAL_DEN_REFRACTION: GLOBAL_DEN_REFRACTION
+                },
+                layers: layers.map(l => ({
+                    ...l,
+                    gradientStops: l.gradientStops.map(arr => [...arr]),
+                    
+                    volShadingMode: BASE_LAYER_CFG.volShadingMode,
+                    volGradientStops: BASE_LAYER_CFG.volGradientStops.map(arr => [...arr]),
+                    volGradientBias: BASE_LAYER_CFG.volGradientBias,
+                    volGradientContrast: BASE_LAYER_CFG.volGradientContrast,
+                    pointFalloff: BASE_LAYER_CFG.pointFalloff,
+                })),
+                emits: emits.map(e => ({
+                    i: e.i, j: e.j, lIdx: e.lIdx, type: e.type, st: e.st, rt: e.rt, off: e.off, shp: e.shp, geo: e.geo, i2: e.i2, j2: e.j2
+                })),
+                camera: { rad, theta, phi },
+                globalDen: Array.from(GLOBAL_DEN),
+                globalCoupling: GLOBAL_COUPLING_LINKS
+            };
+        }
+
+        function setAppState(cfg) {
+            GRID = cfg.global.GRID || DEFAULT_STATE_CONFIG.global.GRID; 
+            $('i-res').value = GRID;
+            GAP = cfg.global.GAP || DEFAULT_STATE_CONFIG.global.GAP; 
+            $('i-gap').value = GAP;
+            ZSC = cfg.global.ZSC || DEFAULT_STATE_CONFIG.global.ZSC; 
+            $('i-z').value = ZSC;
+            DT_FACTOR = cfg.global.DT_FACTOR || DEFAULT_STATE_CONFIG.global.DT_FACTOR; 
+            $('i-dt').value = DT_FACTOR;
+            VISCOSITY = cfg.global.VISCOSITY || DEFAULT_STATE_CONFIG.global.VISCOSITY; 
+            $('i-vis').value = VISCOSITY;
+            lInt = cfg.global.lInt || DEFAULT_STATE_CONFIG.global.lInt; 
+            $('i-li').value = lInt;
+            visMin = cfg.global.visMin || DEFAULT_STATE_CONFIG.global.visMin; 
+            $('i-vis-min').value = visMin;
+            visMax = cfg.global.visMax || DEFAULT_STATE_CONFIG.global.visMax; 
+            $('i-vis-max').value = visMax;
+            GLOBAL_DEN_ABSORPTION = cfg.global.GLOBAL_DEN_ABSORPTION || DEFAULT_STATE_CONFIG.global.GLOBAL_DEN_ABSORPTION; 
+            $('i-gden-abs').value = GLOBAL_DEN_ABSORPTION;
+            GLOBAL_DEN_REFRACTION = cfg.global.GLOBAL_DEN_REFRACTION || DEFAULT_STATE_CONFIG.global.GLOBAL_DEN_REFRACTION; 
+            $('i-gden-ref').value = GLOBAL_DEN_REFRACTION;
+            
+            $('i-sp').value = cfg.global.sunPitch || DEFAULT_STATE_CONFIG.global.sunPitch;
+            $('i-sy').value = cfg.global.sunYaw || DEFAULT_STATE_CONFIG.global.sunYaw;
+            
+            if (cfg.layers && cfg.layers.length > 0) {
+                 BASE_LAYER_CFG.volShadingMode = cfg.layers[0].volShadingMode || BASE_LAYER_CFG.volShadingMode;
+                 BASE_LAYER_CFG.volGradientStops = cfg.layers[0].volGradientStops || BASE_LAYER_CFG.volGradientStops;
+                 BASE_LAYER_CFG.volGradientBias = cfg.layers[0].volGradientBias || BASE_LAYER_CFG.volGradientBias;
+                 BASE_LAYER_CFG.volGradientContrast = cfg.layers[0].volGradientContrast || BASE_LAYER_CFG.volGradientContrast;
+                 BASE_LAYER_CFG.pointFalloff = cfg.layers[0].pointFalloff || BASE_LAYER_CFG.pointFalloff;
+            }
+            
+            const tempConfig = {
+                ...cfg,
+                IS_3D_MODE: cfg.IS_3D_MODE !== undefined ? cfg.IS_3D_MODE : (cfg.global.IS_3D_MODE || DEFAULT_STATE_CONFIG.global.IS_3D_MODE),
+                VOL_LAYERS: cfg.VOL_LAYERS !== undefined ? cfg.VOL_LAYERS : (cfg.global.VOL_LAYERS || DEFAULT_STATE_CONFIG.global.VOL_LAYERS),
+            };
+            
+            fullResetConfig(tempConfig); 
+            updateSimControls(); 
+
+            $('i-vo').oninput();
+        }
+
+        function handlePresetLoad(presetName) {
+            
+            if (presetName && PRESETS[presetName]) {
+                 const config = JSON.parse(JSON.stringify(PRESETS[presetName]));
+                 setAppState(config);
+                 clearSimulation();
+             }
+        }
+
+        function savePresetFile() {
+            try {
+                const state = getAppState();
+                const json = JSON.stringify(state, null, 2);
+                const blob = new Blob([json], {type: 'text/plain'});
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'wave_sim_config.txt';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                $('err').innerText = 'Configuration saved successfully!';
+            } catch (e) {
+                $('err').innerText = 'Error saving config: ' + e.message;
+            }
+        }
+
+        function loadPresetFile() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.txt,.json';
+            input.onchange = e => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    try {
+                        const content = event.target.result;
+                        const config = JSON.parse(content);
+                        if (config.global && config.layers) {
+                            setAppState(config);
+                            $('err').innerText = 'Configuration loaded successfully!';
+                        } else {
+                            throw new Error('Invalid configuration file structure.');
+                        }
+                    } catch (err) {
+                        $('err').innerText = 'Error loading config: ' + err.message;
+                    }
+                };
+                reader.readAsText(file);
+            };
+            input.click();
+        }
+        
+        function fullResetConfig(config) {
+            TIME = 0;
+            layerCounter = 0;
+            emits = []; shapes = [];
+            
+            let cfg = config || DEFAULT_STATE_CONFIG;
+            
+            GRID = cfg.global.GRID || DEFAULT_STATE_CONFIG.global.GRID; 
+            $('i-res').value = GRID;
+            GAP = cfg.global.GAP || DEFAULT_STATE_CONFIG.global.GAP; 
+            $('i-gap').value = GAP;
+            ZSC = cfg.global.ZSC || DEFAULT_STATE_CONFIG.global.ZSC; 
+            $('i-z').value = ZSC;
+            DT_FACTOR = cfg.global.DT_FACTOR || DEFAULT_STATE_CONFIG.global.DT_FACTOR; 
+            $('i-dt').value = DT_FACTOR;
+            VISCOSITY = cfg.global.VISCOSITY || DEFAULT_STATE_CONFIG.global.VISCOSITY; 
+            $('i-vis').value = VISCOSITY;
+            lInt = cfg.global.lInt || DEFAULT_STATE_CONFIG.global.lInt; 
+            $('i-li').value = lInt;
+            visMin = cfg.global.visMin || DEFAULT_STATE_CONFIG.global.visMin; 
+            $('i-vis-min').value = visMin;
+            visMax = cfg.global.visMax || DEFAULT_STATE_CONFIG.global.visMax; 
+            $('i-vis-max').value = visMax;
+            GLOBAL_DEN_ABSORPTION = cfg.global.GLOBAL_DEN_ABSORPTION || DEFAULT_STATE_CONFIG.global.GLOBAL_DEN_ABSORPTION; 
+            $('i-gden-abs').value = GLOBAL_DEN_ABSORPTION;
+            GLOBAL_DEN_REFRACTION = cfg.global.GLOBAL_DEN_REFRACTION || DEFAULT_STATE_CONFIG.global.GLOBAL_DEN_REFRACTION; 
+            $('i-gden-ref').value = GLOBAL_DEN_REFRACTION;
+            
+            $('i-sp').value = cfg.global.sunPitch || DEFAULT_STATE_CONFIG.global.sunPitch;
+            $('i-sy').value = cfg.global.sunYaw || DEFAULT_STATE_CONFIG.global.sunYaw;
+
+            IS_3D_MODE = cfg.IS_3D_MODE !== undefined ? cfg.IS_3D_MODE : (cfg.global.IS_3D_MODE || DEFAULT_STATE_CONFIG.global.IS_3D_MODE);
+            VOL_LAYERS = cfg.VOL_LAYERS !== undefined ? cfg.VOL_LAYERS : (cfg.global.VOL_LAYERS || DEFAULT_STATE_CONFIG.global.VOL_LAYERS); 
+            const iVd = $('i-vd');
+            if (iVd) iVd.value = VOL_LAYERS;
+            
+            $('i-sp').value = cfg.global.sunPitch || DEFAULT_STATE_CONFIG.global.sunPitch;
+            $('i-sy').value = cfg.global.sunYaw || DEFAULT_STATE_CONFIG.global.sunYaw;
+
+            const is3D = IS_3D_MODE;
+            
+            layers = [];
+            layerCounter = 0;
+            
+            let layerCfg = cfg.layers || DEFAULT_STATE_CONFIG.layers;
+            
+            if (layerCfg.length > 0) {
+                BASE_LAYER_CFG.volShadingMode = layerCfg[0].volShadingMode || BASE_LAYER_CFG.volShadingMode;
+                BASE_LAYER_CFG.volGradientStops = layerCfg[0].volGradientStops || BASE_LAYER_CFG.volGradientStops;
+                BASE_LAYER_CFG.volGradientBias = layerCfg[0].volGradientBias || BASE_LAYER_CFG.volGradientBias;
+                BASE_LAYER_CFG.volGradientContrast = layerCfg[0].volGradientContrast || BASE_LAYER_CFG.volGradientContrast;
+                BASE_LAYER_CFG.pointFalloff = layerCfg[0].pointFalloff || BASE_LAYER_CFG.pointFalloff;
+                
+                BASE_LAYER_CFG.C = layerCfg[0].C; 
+                BASE_LAYER_CFG.D = layerCfg[0].D;
+                BASE_LAYER_CFG.K = layerCfg[0].K; 
+            }
+
+
+            if (is3D) {
+                 for(let k=0; k<VOL_LAYERS; k++) {
+                    layers.push(defL(layerCounter++));
+                }
+            } else {
+                 layerCfg.forEach(lCfg => {
+                    let newL = defL(layerCounter++);
+                    Object.assign(newL, lCfg);
+                    
+                    const preset = FORMULA_PRESETS[newL.formulaKey] || FORMULA_PRESETS.WAVE;
+                    newL.C_label = preset.C_label;
+                    newL.D_label = preset.D_label;
+                    layers.push(newL);
+                });
+            }
+
+            emits = cfg.emits || [];
+            emits.forEach(e => e.id = Date.now() + Math.random()); 
+
+            if (cfg.camera) {
+                rad = cfg.camera.rad || DEFAULT_STATE_CONFIG.camera.rad; 
+                theta = cfg.camera.theta || DEFAULT_STATE_CONFIG.camera.theta; 
+                phi = cfg.camera.phi || DEFAULT_STATE_CONFIG.camera.phi;
+                updCam();
+            }
+
+            initData(); 
+            
+            if (cfg.globalDen && Array.isArray(cfg.globalDen)) {
+                GLOBAL_DEN = new Float32Array(cfg.globalDen);
+            } else {
+                GLOBAL_DEN.fill(0);
+            }
+            
+            
+            GLOBAL_COUPLING_LINKS = cfg.globalCoupling || [];
+
+            updateSimControls();
+            
+            if (cfg.initialDensity) {
+                currentSDFParams = Object.assign(currentSDFParams, cfg.initialDensity);
+                
+                placeShape(GRID/2, GRID/2, IS_3D_MODE ? 0 : layers.findIndex(l => l.intr));
+            }
+            
+            updateUI(); 
+
+            $('i-sp').oninput();
+            $('l-gap').innerText = GAP; $('l-z').innerText = ZSC.toFixed(1);
+            $('l-vism').innerText = `${visMin.toFixed(2)} - ${visMax.toFixed(2)}`;
+            
+            selectedEmitterId = null;
+            updateEmitterInspector();
+            
+            resetSimulationAndState();
+            IS_PAUSED = false; 
+        }
+
+        function initData() {
+            GRID = +$('i-res').value;
+            u = layers.map(()=>new Float32Array(GRID*GRID));
+            u_prev = layers.map(()=>new Float32Array(GRID*GRID));
+            den = layers.map(()=>new Float32Array(GRID*GRID));
+            if (GLOBAL_DEN.length !== GRID*GRID) {
+                 GLOBAL_DEN = new Float32Array(GRID*GRID);
+            }
+            syncM();
+            $('l-res').innerText = GRID;
+        }
+        
+        function resetSimulationAndState() {
+            IS_PAUSED = true;
+            TIME = 0;
+            emits = emits.filter(e => e.type !== 'EMITTER_LINE_DRAG'); 
+            u.forEach(arr => arr.fill(0));
+            u_prev.forEach(arr => arr.fill(0));
+            selectedEmitterId = null;
+            updateEmitterInspector();
+            syncE(); 
+        }
+
+        function updateEmitterInspector() {
+            const menu = $('emit-menu');
+            if (!selectedEmitterId) {
+                menu.style.display = 'none';
+                editEmitId = null;
+                return;
+            }
+            const em = emits.find(x => x.id === selectedEmitterId);
+            if (!em) {
+                selectedEmitterId = null; menu.style.display = 'none'; editEmitId = null; return;
+            }
+            editEmitId = em.id; menu.style.display = 'block';
+            $('em-shp').value = em.shp; $('em-geo').value = em.geo || 'POINT';
+            $('em-st').value = em.st; $('i-em-rt').value = em.rt; $('i-em-of').value = em.off;
+            $('em-st-v').innerText = em.st.toFixed(1); $('em-rt-v').innerText = em.rt; $('em-of-v').innerText = em.off;
+        }
+
+        function deleteSelectedEmitter() {
+            if (selectedEmitterId) {
+                const idx = emits.findIndex(e => e.id === selectedEmitterId);
+                if (idx !== -1) {
+                    emits.splice(idx, 1);
+                    selectedEmitterId = null;
+                    updateEmitterInspector();
+                    syncE();
+                }
+            }
+        }
+
+        function renderVolGradientControls() {
+            const d = $('vol-gradient-stops'); d.innerHTML = '';
+            const stops = BASE_LAYER_CFG.volGradientStops;
+            const l = BASE_LAYER_CFG;
+            
+            window.volAddStop = function() { stops.length < MAX_GRADIENT_STOPS ? stops.push([200, 200, 200]) : null; updTr(); updateUI(); };
+            window.volRemoveStop = function(idx) { stops.length > 1 ? stops.splice(idx, 1) : null; updTr(); updateUI(); };
+
+            stops.forEach((stop, index) => {
+                var colorInputId = `vol_color_stop_${index}`;
+                var b = document.createElement('div');
+                b.className = 'color-picker-row';
+                b.innerHTML = `<label>Stop ${index}</label><input type="color" id="${colorInputId}" value="${toHex(stop)}" oninput="var c=this.value; BASE_LAYER_CFG.volGradientStops[${index}]=hexToRgb(c); updTr(); syncM();">
+                    ${stops.length > 1 ? `<button onclick="window.volRemoveStop(${index})">-</button>` : ''}`;
+                d.appendChild(b);
+            });
+            
+            $('vol-shade-select').value = l.volShadingMode;
+            $('i-vol-gb').value = l.volGradientBias; $('l-vol-gb').innerText = l.volGradientBias.toFixed(2);
+            $('i-vol-gc').value = l.volGradientContrast; $('l-vol-gc').innerText = l.volGradientContrast.toFixed(1);
+            $('i-pf').value = l.pointFalloff; $('l-pf').innerText = l.pointFalloff.toFixed(2);
+
+            $('btn-add-vol-stop').onclick = window.volAddStop;
+            
+            const iVolGb = $('i-vol-gb');
+            if(iVolGb) iVolGb.classList.add('custom-drag-slider');
+            const iVolGc = $('i-vol-gc');
+            if(iVolGc) iVolGc.classList.add('custom-drag-slider');
+            const iPf = $('i-pf');
+            if(iPf) iPf.classList.add('custom-drag-slider');
+            
+            EV('vol-shade-select', 'change', (e) => {
+                BASE_LAYER_CFG.volShadingMode = e.target.value;
+                syncM();
+            });
+            
+            EV('i-vol-gb', 'input', (e) => {
+                BASE_LAYER_CFG.volGradientBias = parseFloat(e.target.value);
+                $('l-vol-gb').innerText = BASE_LAYER_CFG.volGradientBias.toFixed(2);
+                syncM();
+            });
+            
+            EV('i-vol-gc', 'input', (e) => {
+                BASE_LAYER_CFG.volGradientContrast = parseFloat(e.target.value);
+                $('l-vol-gc').innerText = BASE_LAYER_CFG.volGradientContrast.toFixed(1);
+                syncM();
+            });
+            
+            EV('i-pf', 'input', (e) => {
+                 BASE_LAYER_CFG.pointFalloff = parseFloat(e.target.value);
+                 $('l-pf').innerText = BASE_LAYER_CFG.pointFalloff.toFixed(2);
+                 layers.forEach(l => l.pointFalloff = BASE_LAYER_CFG.pointFalloff);
+                 syncM();
+             });
+        }
+        
+        function renderDynamicBrushControls() {
+            const d = $('dynamic-brush-controls');
+            let content = '';
+
+            if (brush !== 'EMITTER_PLACE' && brush !== 'SDF_PLACE') {
+                content += `<label>Brush Radius: <span id="l-rad" class="value-label">${mRad}</span></label><input type="range" id="i-rad" min="1" max="50" value="${mRad}"><label>Brush Hardness (Falloff Edge): <span id="l-hnd" class="value-label">${brushHnd.toFixed(1)}</span></label><input type="range" id="i-hnd" min="0.0" max="1.0" value="${brushHnd}" step="0.1">`;
+            }
+
+            if (brush === 'DISTURBANCE') {
+                const impulseControls = `<h4 style="margin-top: 10px;">Impulse Behavior</h4><label>Impulse Magnitude: <span id="l-mag" class="value-label">${IMPULSE_MAGNITUDE.toFixed(1)}</span></label><input type="range" id="i-mag" min="0.1" max="15.0" value="${IMPULSE_MAGNITUDE}" step="0.1"><label>Wavelength / Duration: <span id="l-wave-len" class="value-label">${IMPULSE_WAVELENGTH}</span></label><input type="range" id="i-wave-len" min="10" max="200" value="${IMPULSE_WAVELENGTH}"><div class="row"><label>Type</label><select id="i-type" style="width:100%;"><option value="PULSE" ${!IS_IMPULSE_HOLD ? 'selected' : ''}>Pulse (Transient)</option><option value="HOLD" ${IS_IMPULSE_HOLD ? 'selected' : ''}>Hold (Continuous)</option></select></div><div class="row" style="margin-top: 4px;"><label>Waveform</label><select id="i-wave-shape" style="width:100%;"><option value="CONSTANT" ${IMPULSE_WAVE_TYPE === 'CONSTANT' ? 'selected' : ''}>Constant Pulse</option><option value="SINE" ${IMPULSE_WAVE_TYPE === 'SINE' ? 'selected' : ''}>Sine Pulse</option><option value="SQUARE" ${IMPULSE_WAVE_TYPE === 'SQUARE' ? 'selected' : ''}>Square Pulse</option><option value="SAW" ${IMPULSE_WAVE_TYPE === 'SAW' ? 'selected' : ''}>Sawtooth Pulse</option></select></div><div class="row" style="margin-top: 4px;"><label>Shape</label><select id="i-shape" style="width:100%;"><option value="GAUSSIAN" ${IMPULSE_SHAPE === 'GAUSSIAN' ? 'selected' : ''}>Gaussian (Soft)</option><option value="SQUARE" ${IMPULSE_SHAPE === 'SQUARE' ? 'selected' : ''}>Square (Hard Edge)</option></select></div>`;
+                content += impulseControls;
+
+            } else if (brush === 'DENSITY_PAINT') {
+                const densityControls = `
+                    <h4 style="margin-top: 10px;">Density Paint Controls</h4>
+                    <label>Paint Density Val: <span id="l-pv" class="value-label">${mVal.toFixed(1)}</span></label>
+                    <input type="range" id="i-pv" min="0" max="1" step="0.1" value="${mVal}">
+                    
+                    <label>Density Flow Rate (Softness): <span id="l-flow" class="value-label">${DEN_FLOW_RATE.toFixed(2)}</span></label>
+                    <input type="range" id="i-flow" min="0.01" max="1.0" step="0.01" value="${DEN_FLOW_RATE}">
+
+                    <div class="row" style="margin-top: 4px;">
+                        <label>Density Brush Mode</label>
+                        <select id="i-den-mode" style="width:100%;">
+                            <option value="REPLACE" ${DEN_BRUSH_MODE === 'REPLACE' ? 'selected' : ''}>Replace/Blend</option>
+                            <option value="ADD" ${DEN_BRUSH_MODE === 'ADD' ? 'selected' : ''}>Add Only</option>
+                            <option value="SUBTRACT" ${DEN_BRUSH_MODE === 'SUBTRACT' ? 'selected' : ''}>Subtract Only</option>
+                        </select>
+                    </div>`;
+                 content += densityControls;
+            }
+            
+            d.innerHTML = content; 
+
+            const iRad = $('i-rad');
+            if (iRad) {
+                iRad.classList.add('custom-drag-slider');
+                iRad.oninput = e => { mRad = +e.target.value; $('l-rad').innerText = mRad; };
+            }
+            const iHnd = $('i-hnd');
+            if (iHnd) {
+                iHnd.classList.add('custom-drag-slider');
+                iHnd.oninput = e => { brushHnd = +e.target.value; $('l-hnd').innerText = brushHnd.toFixed(1); };
+            }
+
+            const iMag = $('i-mag');
+            if (iMag) {
+                iMag.classList.add('custom-drag-slider');
+                iMag.oninput = e => { IMPULSE_MAGNITUDE = +e.target.value; $('l-mag').innerText = IMPULSE_MAGNITUDE.toFixed(1); };
+                $('i-type').onchange = e => { IS_IMPULSE_HOLD = e.target.value === 'HOLD'; };
+                $('i-shape').onchange = e => { IMPULSE_SHAPE = e.target.value; };
+                $('i-wave-shape').onchange = e => { IMPULSE_WAVE_TYPE = e.target.value; };
+                $('i-wave-len').oninput = e => { IMPULSE_WAVELENGTH = +e.target.value; $('l-wave-len').innerText = IMPULSE_WAVELENGTH; };
+                $('i-wave-len').classList.add('custom-drag-slider');
+            }
+
+            const iPv = $('i-pv');
+            if (iPv) {
+                iPv.classList.add('custom-drag-slider');
+                iPv.oninput = e => { mVal = +e.target.value; $('l-pv').innerText = mVal.toFixed(1); };
+            }
+            const iFlow = $('i-flow');
+            if (iFlow) {
+                iFlow.classList.add('custom-drag-slider');
+                iFlow.oninput = e => { DEN_FLOW_RATE = +e.target.value; $('l-flow').innerText = DEN_FLOW_RATE.toFixed(2); };
+                $('i-den-mode').onchange = e => { DEN_BRUSH_MODE = e.target.value; };
+            }
+        }
+        
+        function renderCouplingMatrixUI() {
+            const container = $('coupling-links-container');
+            container.innerHTML = '';
+
+            if (layers.length < 2) {
+                container.innerHTML = '<p style="text-align:center; color:#888;">Add at least two layers to enable coupling.</p>';
+                return;
+            }
+
+            GLOBAL_COUPLING_LINKS.forEach((link, index) => {
+                const linkDiv = document.createElement('div');
+                linkDiv.className = 'coupling-link';
+
+                const layerOptions = layers.map((l, i) => `<option value="${i}">Layer ${i + 1} (${l.name})</option>`).join('');
+                
+                const rateText = link.rate ? link.rate.toFixed(4) : "0.0000";
+
+                linkDiv.innerHTML = `
+                    <div class="row" style="justify-content: space-between;">
+                        <b>Link ${index + 1}</b>
+                        <button onclick="deleteCouplingLink(${index})" style="width: 30px; padding: 0 4px; background: var(--color-danger); border-color: #844;">X</button>
+                    </div>
+                    
+                    <label>Source Layer</label>
+                    <select id="link_src_${index}" onchange="updateCouplingLink(${index}, 'sourceIdx', +this.value)">
+                       ${layerOptions}
+                    </select>
+                    
+                    <label>Target Layer</label>
+                    <select id="link_tgt_${index}" onchange="updateCouplingLink(${index}, 'targetIdx', +this.value)">
+                       ${layerOptions}
+                    </select>
+                    
+                    <label>Coupling Rate: <span id="l_rate_${index}" class="value-label">${rateText}</span></label>
+                    <input type="range" min="0" max="0.01" step="0.0001" value="${link.rate}" 
+                           data-link-index="${index}" data-link-property="rate"
+                           class="custom-drag-slider coupling-rate-slider">
+
+                    <label>Target Property</label>
+                    <select onchange="updateCouplingLink(${index}, 'targetProperty', this.value)">
+                        <option value="AMPLITUDE" ${link.targetProperty === 'AMPLITUDE' ? 'selected' : ''}>Amplitude (Wave Value)</option>
+                        <option value="VELOCITY" ${link.targetProperty === 'VELOCITY' ? 'selected' : ''}>Velocity (Wave Change)</option>
+                    </select>
+                `;
+                
+                
+                linkDiv.querySelector(`#link_src_${index}`).value = link.sourceIdx;
+                linkDiv.querySelector(`#link_tgt_${index}`).value = link.targetIdx;
+
+                container.appendChild(linkDiv);
+            });
+            setupCustomSliderDrag(); 
+        }
+
+        function addCouplingLink() {
+            if (layers.length < 2) {
+                 $('err').innerText = "Cannot add link: Need at least two layers.";
+                 return;
+            }
+            
+            GLOBAL_COUPLING_LINKS.push({
+                sourceIdx: 0,
+                targetIdx: Math.min(1, layers.length - 1),
+                rate: 0.001,
+                targetProperty: 'AMPLITUDE'
+            });
+            renderCouplingMatrixUI();
+        }
+
+        function updateCouplingLink(index, property, value) {
+            if (GLOBAL_COUPLING_LINKS[index]) {
+                GLOBAL_COUPLING_LINKS[index][property] = value;
+            }
+            
+            if (property === 'sourceIdx' || property === 'targetIdx') {
+                 renderCouplingMatrixUI();
+            } else if (property === 'rate') {
+                 const label = $(`l_rate_${index}`);
+                 if (label) label.innerText = value.toFixed(4);
+            }
+        }
+
+        function deleteCouplingLink(index) {
+            GLOBAL_COUPLING_LINKS.splice(index, 1);
+            renderCouplingMatrixUI();
+        }
+
+        function updateLayerListUI() {
+            const expansionState = getExpansionState(); 
+            var d = $('layers'); d.innerHTML = '';
+            
+            const is3D = IS_3D_MODE;
+            $('layers-group').style.display = is3D ? 'none' : 'block';
+            
+            if (is3D && layers.length > 0) {
+                d.innerHTML = '<div class="layer-box" style="border-color:var(--color-active); text-align:center; padding:10px;"><b>Volume Mode Active</b><br><small>Physics and Visualization are controlled globally.</small></div>';
+                
+                var l = layers[0];
+                var b = document.createElement('div'); b.className='layer-box'; b.style.borderColor = 'var(--color-active)';
+                b.innerHTML = `<div class="row"><b>Global Volume Params</b></div><label>Speed (C)</label><input type="range" id="i-sim-c" min="0.05" max="0.5" step="0.01" value="${l.C}"><label>Damp (D)</label><input type="range" id="i-sim-d" min="0" max="0.1" step="0.001" value="${l.D}"><div class="row"><button onclick="clearSimulation();">Reset Waves</button><button onclick="den.forEach(x=>x.fill(0)); syncM();">Reset Density</button></div>`;
+                d.appendChild(b);
+
+                
+                const iSimC = $('i-sim-c');
+                if (iSimC) {
+                    iSimC.classList.add('custom-drag-slider');
+                    iSimC.oninput = function() { layers.forEach(x=>x.C=+this.value); BASE_LAYER_CFG.C=+this.value; };
+                }
+                const iSimD = $('i-sim-d');
+                if (iSimD) {
+                    iSimD.classList.add('custom-drag-slider');
+                    iSimD.oninput = function() { layers.forEach(x=>x.D=+this.value); BASE_LAYER_CFG.D=+this.value; };
+                }
+
+            } else if (!is3D) {
+                layers.forEach((l, i) => {
+                    window[`resetDen_${i}`] = function() { den[i].fill(0); syncM(); };
+                    window[`addStop_${i}`] = function() { l.gradientStops.length < MAX_GRADIENT_STOPS ? l.gradientStops.push([200, 200, 200]) : null; syncM(); updateLayerListUI(); };
+                    window[`removeStop_${i}`] = function(idx) { l.gradientStops.length > 1 ? l.gradientStops.splice(idx, 1) : null; syncM(); updateLayerListUI(); };
+                    window[`updateLayerBorder_${i}`] = function(hex) { $(`layer_box_${l.id}`).style.borderColor = hex; };
+
+                    const formulaKey = l.formulaKey || 'WAVE';
+                    const preset = FORMULA_PRESETS[formulaKey];
+                    
+                    
+                    const cLabel = l.C_label || preset.C_label;
+                    const dLabel = l.D_label || preset.D_label;
+
+                    var b = document.createElement('div'); b.className='layer-box layer-controls'; b.id = `layer_box_${l.id}`; b.style.borderColor=`rgb(${l.gradientStops[0].join(',')})`;
+                    var gradientControlsHtml = `<h4 style="border-bottom:none; margin-top: 5px;">Gradient Stops (${l.gradientStops.length}/${MAX_GRADIENT_STOPS})</h4>`;
+                    l.gradientStops.forEach((stop, index) => {
+                        var colorInputId = `color_stop_${l.id}_${index}`;
+                        gradientControlsHtml += `<div class="color-picker-row"><label>Stop ${index}</label><input type="color" id="${colorInputId}" value="${toHex(stop)}" oninput="var c=this.value; layers[${i}].gradientStops[${index}]=hexToRgb(c); window.updateLayerBorder_${i}(c); updTr(); syncM();">${l.gradientStops.length > 1 ? `<button onclick="window.removeStop_${i}(${index})">-</button>` : ''}</div>`;
+                    });
+                    if (l.gradientStops.length < MAX_GRADIENT_STOPS) { gradientControlsHtml += `<button onclick="window.addStop_${i}()">+ Add Stop</button>`; }
+
+                    var shadingSelectId = `shade_${l.id}`; var visModeSelectId = `vis_${l.id}`;
+                    
+                    const formulaSelectHtml = `<label>Simulation Model</label><select id="formula_select_${l.id}" onchange="updateLayerFormula(${i}, this.value)">${Object.keys(FORMULA_PRESETS).map(key => `<option value="${key}" ${formulaKey === key ? 'selected' : ''}>${FORMULA_PRESETS[key].name}</option>`).join('')}</select>`;
+
+                    
+                    const cInputId = `i-c-${l.id}`;
+                    const dInputId = `i-d-${l.id}`;
+                    const kInputId = `i-k-${l.id}`;
+
+                    const pointSizeControls = `<div id="point_size_controls_${l.id}" style="margin-top: 8px; display: ${l.visMode==='POINTS'?'block':'none'};">
+                        <label>Point Base Size: <span id="l-psz_${l.id}" class="value-label">${l.pointSize.toFixed(1)}</span></label>
+                        <input type="range" id="i-psz-${l.id}" min="0.1" max="20.0" step="0.1" value="${l.pointSize}" oninput="layers[${i}].pointSize = parseFloat(this.value); document.getElementById('l-psz_${l.id}').innerText = this.value; updTr();">
+                        <label>Point Scale Factor: <span id="l-psc_${l.id}" class="value-label">${l.pointScaleFactor.toFixed(1)}</span></label>
+                        <input type="range" id="i-psc-${l.id}" min="0.0" max="10.0" step="0.1" value="${l.pointScaleFactor}" oninput="layers[${i}].pointScaleFactor = parseFloat(this.value); document.getElementById('l-psc_${l.id}').innerText = this.value; updTr();">
+                        <label>Point Falloff: <span id="l-pf_${l.id}" class="value-label">${l.pointFalloff.toFixed(2)}</span></label>
+                        <input type="range" id="i-pf-${l.id}" min="0.0" max="1.0" step="0.01" value="${l.pointFalloff}" oninput="layers[${i}].pointFalloff = parseFloat(this.value); document.getElementById('l-pf_${l.id}').innerText = this.value; updTr();">
+                    </div>`;
+
+
+                    b.innerHTML = `<div class="row"><b>${l.name}</b><input type="checkbox" id="layer_vis_checkbox_${l.id}" ${l.vis?'checked':''} onchange="layers[${i}].vis=this.checked; updateLayerParamUI(${i}, 'vis');"><label for="layer_vis_checkbox_${l.id}" style="margin-right:8px; width: auto;">Vis</label><input type="checkbox" id="layer_intr_checkbox_${l.id}" ${l.intr?'checked':''} onchange="layers[${i}].intr=this.checked; updateLayerParamUI(${i}, 'intr');"><label for="layer_intr_checkbox_${l.id}" style="width: auto;">Int</label></div><div class="expandable-header" data-target="layer-sim-controls-${l.id}">Simulation Parameters <span class="expand-arrow">&#x25B8;</span></div><div id="layer-sim-controls-${l.id}" class="expandable-content">${formulaSelectHtml}<div id="sim_controls_${l.id}"><label><b>${cLabel}</b> (<span id="l-c-${l.id}" class="value-label">${l.C.toFixed(3)}</span>)</label><input type="range" id="${cInputId}" min="0.01" max="${preset.C_max}" step="0.01" value="${l.C}"><label><b>${dLabel}</b> (<span id="l-d-${l.id}" class="value-label">${l.D.toFixed(3)}</span>)</label><input type="range" id="${dInputId}" min="0" max="${preset.D_max}" step="0.001" value="${l.D}"></div><label>Vertical/Legacy Coupling (K) (<span id="l-k-${l.id}" class="value-label">${l.K.toFixed(3)}</span>)</label><input type="range" id="${kInputId}" min="0" max="0.1" step="0.005" value="${l.K}"><div class="row"><label>Bnd</label><select onchange="layers[${i}].bnd=this.value;"><option value="FIXED" ${l.bnd==='FIXED'?'selected':''}>FIXED (Wall)</option><option value="ABSORBING" ${l.bnd==='ABSORBING'?'selected':''}>ABSORBING (Open)</option></select></div><div class="row"><button onclick="u[${i}].fill(0); u_prev[${i}].fill(0); updTr();">Rst Wav</button><button onclick="window.resetDen_${i}()">Rst Den</button></div></div><div class="expandable-header" data-target="layer-vis-controls-${l.id}">Visualization & Styling <span class="expand-arrow">&#x25B8;</span></div><div id="layer-vis-controls-${l.id}" class="expandable-content">${gradientControlsHtml}<div class="row"><label>Vis Mode</label><select id="${visModeSelectId}" onchange="layers[${i}].visMode=this.value;syncM();updateLayerListUI();"><option value="MESH" ${l.visMode==='MESH'?'selected':''}>Mesh (Surface)</option><option value="POINTS" ${l.visMode==='POINTS'?'selected':''}>Points (Vector)</option></select></div><div class="row"><label>Shading Mode</label><select id="${shadingSelectId}" onchange="layers[${i}].shadingMode=this.value;syncM();"><option value="SPECULAR" ${l.shadingMode==='SPECULAR'?'selected':''}>Default (Specular)</option><option value="HEIGHT" ${l.shadingMode==='HEIGHT'?'selected':''}>Height-Based</option><option value="VELOCITY" ${l.shadingMode==='VELOCITY'?'selected':''}>Velocity Gradient</option><option value="ENERGY" ${l.shadingMode==='ENERGY'?'selected':''}>Heatmap (Energy)</option><option value="DIVERGENCE" ${l.shadingMode==='DIVERGENCE'?'selected':''}>Divergence (Red/Blue)</option><option value="VECTOR_RGB" ${l.shadingMode==='VECTOR_RGB'?'selected':''}>Vector RGB</option></select></div>${pointSizeControls}<label>Grad. Bias: <span id="l-gb_${l.id}" class="value-label">${l.gradientBias.toFixed(2)}</span></label><input type="range" id="i-gb-${l.id}" min="-1.0" max="1.0" step="0.05" value="${l.gradientBias}"><label>Grad. Contrast: <span id="l-gc_${l.id}" class="value-label">${l.gradientContrast.toFixed(1)}</span></label><input type="range" id="i-gc-${l.id}" min="0.1" max="5.0" step="0.1" value="${l.gradientContrast}"></div>`;
+                    d.appendChild(b);
+
+                    
+                    const cInputEl = $(cInputId);
+                    const lCEl = $(`l-c-${l.id}`);
+                    if (cInputEl) {
+                        cInputEl.classList.add('custom-drag-slider');
+                        cInputEl.oninput = function() { layers[i].C = +this.value; lCEl.innerText = layers[i].C.toFixed(3); };
+                    }
+                    const dInputEl = $(dInputId);
+                    const lDEl = $(`l-d-${l.id}`);
+                    if (dInputEl) {
+                        dInputEl.classList.add('custom-drag-slider');
+                        dInputEl.oninput = function() { layers[i].D = +this.value; lDEl.innerText = layers[i].D.toFixed(3); };
+                    }
+                    const kInputEl = $(kInputId);
+                    const lKEl = $(`l-k-${l.id}`);
+                    if (kInputEl) {
+                        kInputEl.classList.add('custom-drag-slider');
+                        kInputEl.oninput = function() { layers[i].K = +this.value; lKEl.innerText = layers[i].K.toFixed(3); };
+                    }
+
+                    const iGbEl = $(`i-gb-${l.id}`);
+                    if (iGbEl) {
+                        iGbEl.classList.add('custom-drag-slider');
+                        iGbEl.oninput = function() { layers[i].gradientBias = parseFloat(this.value); document.getElementById(`l-gb_${l.id}`).innerText = parseFloat(this.value).toFixed(2); syncM(); };
+                    }
+                    const iGcEl = $(`i-gc-${l.id}`);
+                    if (iGcEl) {
+                        iGcEl.classList.add('custom-drag-slider');
+                        iGcEl.oninput = function() { layers[i].gradientContrast = parseFloat(this.value); document.getElementById(`l-gc_${l.id}`).innerText = parseFloat(this.value).toFixed(1); syncM(); };
+                    }
+
+                    $(`i-psz-${l.id}`).classList.add('custom-drag-slider');
+                    $(`i-psc-${l.id}`).classList.add('custom-drag-slider');
+                    $(`i-pf-${l.id}`).classList.add('custom-drag-slider');
+                    
+
+                    
+                });
+            }
+            restoreExpansionState(expansionState);
+        }
+
+        function updateUI() {
+            const is3D = IS_3D_MODE;
+            
+            $('volume-settings-group-sidebar').style.display = is3D ? 'block' : 'none';
+            $('vol-controls-toolbar').style.display = is3D ? 'flex' : 'none';
+            $('btn-vol').style.display = is3D ? 'none' : 'block';
+            $('3d-cam-controls').style.display = is3D ? 'flex' : 'none';
+            $('global-coupling-group').style.display = is3D ? 'none' : 'block';
+            
+            const volControlsSidebar = $('vol-controls-sidebar');
+            if (volControlsSidebar) {
+                volControlsSidebar.style.display = is3D ? 'block' : 'none';
+            }
+            
+            updateLayerListUI();
+            renderCouplingMatrixUI(); 
+            renderDynamicBrushControls();
+            renderVolGradientControls(); 
+
+            $('l-gap').innerText = GAP;
+            $('l-z').innerText = ZSC.toFixed(1);
+            $('l-li').innerText = lInt;
+            $('l-vo').innerText = parseFloat($('i-vo').value).toFixed(2);
+            $('l-vd').innerText = VOL_LAYERS;
+            $('l-psz').innerText = BASE_POINT_SETTINGS.pointSize.toFixed(1);
+            $('l-psc').innerText = BASE_POINT_SETTINGS.pointScaleFactor.toFixed(1);
+            $('l-pf').innerText = BASE_POINT_SETTINGS.pointFalloff.toFixed(2);
+
+            updateSimControls();
+            updVis();
+        }
+
+        function setupSDFMenuDrag() {
+            const sdfMenu = $('sdf-menu');
+            let isDraggingMenu = false;
+            let startX, startY, startLeft, startTop;
+
+            sdfMenu.onmousedown = (e) => {
+                if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT' && e.target.tagName !== 'BUTTON' && e.target.id !== 'sdf-preview') {
+                    isDraggingMenu = true;
+                    startX = e.clientX;
+                    startY = e.clientY;
+                    const rect = sdfMenu.getBoundingClientRect();
+                    startLeft = rect.left;
+                    startTop = rect.top;
+                    sdfMenu.style.cursor = 'grabbing';
+                    e.stopPropagation();
+                }
+            };
+
+            window.addEventListener('mousemove', (e) => {
+                if (!isDraggingMenu) return;
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+
+                let newLeft = startLeft + dx;
+                let newTop = startTop + dy;
+
+                newLeft = Math.max(0, Math.min(window.innerWidth - sdfMenu.offsetWidth, newLeft));
+                newTop = Math.max(0, Math.min(window.innerHeight - sdfMenu.offsetHeight, newTop));
+                
+                sdfMenu.style.left = `${newLeft}px`;
+                sdfMenu.style.top = `${newTop}px`;
+            });
+
+            window.addEventListener('mouseup', () => {
+                if (isDraggingMenu) {
+                    isDraggingMenu = false;
+                    sdfMenu.style.cursor = 'grab';
+                }
+            });
+        }
+
+        function setupGlobalEvents() {
+            const emitMenu = $('emit-menu');
+            let isDraggingEmitMenu = false;
+            let startX, startY, startLeft, startTop;
+
+            emitMenu.onmousedown = (e) => {
+                if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT' && e.target.tagName !== 'BUTTON') {
+                    isDraggingEmitMenu = true;
+                    startX = e.clientX;
+                    startY = e.clientY;
+                    const rect = emitMenu.getBoundingClientRect();
+                    startLeft = rect.left;
+                    startTop = rect.top;
+                    emitMenu.style.cursor = 'grabbing';
+                    e.stopPropagation();
+                }
+            };
+
+            window.addEventListener('mousemove', (e) => {
+                if (!isDraggingEmitMenu) return;
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+
+                let newLeft = startLeft + dx;
+                let newTop = startTop + dy;
+
+                newLeft = Math.max(0, Math.min(window.innerWidth - emitMenu.offsetWidth, newLeft));
+                newTop = Math.max($('top-toolbar').offsetHeight, Math.min(window.innerHeight - emitMenu.offsetHeight, newTop));
+                
+                emitMenu.style.left = `${newLeft}px`;
+                emitMenu.style.top = `${newTop}px`;
+            });
+
+            window.addEventListener('mouseup', () => {
+                if (isDraggingEmitMenu) {
+                    isDraggingEmitMenu = false;
+                    emitMenu.style.cursor = 'grab';
+                }
+            });
+
+            window.addEventListener('keydown', (e) => {
+                if (e.key === 'F3') { e.preventDefault(); document.body.classList.toggle('cinematic-mode'); onResize(); }
+                if ((e.key === 'Delete' || e.key === 'Backspace') && selectedEmitterId) { e.preventDefault(); deleteSelectedEmitter(); }
+            });
+
+            document.getElementById('sidebar').addEventListener('click', (e) => {
+                 const header = e.target.closest('.expandable-header');
+                 if (header) {
+                     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON') {
+                          return;
+                     }
+                     toggleExpand(header);
+                     e.preventDefault(); 
+                     e.stopPropagation();
+                 }
+            });
+            
+            document.getElementById('sidebar').addEventListener('mousedown', (e) => {
+                 if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'BUTTON') {
+                     e.stopPropagation();
+                 }
+            });
+
+
+            EV('btn-toggle-ui', 'click', () => { 
+                document.body.classList.toggle('cinematic-mode');
+                if (document.body.classList.contains('cinematic-mode')) { $('emit-menu').style.display = 'none'; $('sdf-menu').style.display = 'none'; }
+                onResize();
+            });
+            
+            EV('btn-toggle-play', 'click', togglePlayPause);
+            EV('btn-clear', 'click', clearSimulation);
+            EV('btn-reset-density', 'click', resetDensity);
+            EV('btn-reset-settings', 'click', resetViewSettings);
+            EV('btn-full-reset', 'click', () => fullResetConfig(DEFAULT_STATE_CONFIG)); 
+            EV('btn-add', 'click', addLayer); EV('btn-rem', 'click', removeLayer);
+            
+            EV('btn-cam-top', 'click', () => setCameraView(45, 1, 60)); EV('btn-cam-left', 'click', () => setCameraView(135, 60, 60)); EV('btn-cam-right', 'click', () => setCameraView(315, 60, 60)); EV('btn-cam-bottom', 'click', () => setCameraView(45, 179, 60)); 
+            EV('i-dt', 'input', updateSimControls); EV('i-vis', 'input', updateSimControls);
+            
+            EV('btn-save-preset', 'click', savePresetFile); EV('btn-load-preset', 'click', loadPresetFile);
+            
+            EV('btn-add-coupling', 'click', addCouplingLink);
+            
+            const btnVol = $('btn-vol');
+            if (btnVol) btnVol.onclick = () => {
+                IS_3D_MODE = true; VOL_LAYERS = +$('i-vd').value;
+                fullResetConfig({ global: { ...DEFAULT_STATE_CONFIG.global, IS_3D_MODE: true, VOL_LAYERS: VOL_LAYERS }, layers: [], emits: [] }); 
+                updateUI();
+            };
+            const btnExitVol = $('btn-exit-vol');
+            if (btnExitVol) btnExitVol.onclick = () => {
+                IS_3D_MODE = false;
+                fullResetConfig({ 
+                    global: { ...DEFAULT_STATE_CONFIG.global, IS_3D_MODE: false, VOL_LAYERS: 40 }, 
+                    layers: DEFAULT_STATE_CONFIG.layers, 
+                    emits: [] 
+                }); 
+                updateUI();
+            };
+
+            EV('em-st', 'input', (e) => { $('em-st-v').innerText = (+e.target.value).toFixed(1); const em = emits.find(x => x.id === editEmitId); if (em) em.st = +e.target.value; });
+            EV('i-em-rt', 'input', (e) => { $('em-rt-v').innerText = e.target.value; const em = emits.find(x => x.id === editEmitId); if (em) em.rt = +e.target.value; });
+            EV('i-em-of', 'input', (e) => { $('em-of-v').innerText = e.target.value; const em = emits.find(x => x.id === editEmitId); if (em) em.off = +e.target.value; });
+            EV('em-shp', 'change', (e) => { const em = emits.find(x => x.id === editEmitId); if (em) em.shp = e.target.value; });
+            EV('em-geo', 'change', (e) => { const em = emits.find(x => x.id === editEmitId); if (em) em.geo = e.target.value; syncE(); });
+            EV('em-del-btn', 'click', deleteSelectedEmitter);
+            EV('em-close', 'click', () => { selectedEmitterId = null; updateEmitterInspector(); syncE(); });
+            
+            setupSDFMenuHandlers();
+            setupSDFMenuDrag(); 
+        }
+        
+        var updVis = () => { 
+            visMin = parseFloat($('i-vis-min').value); 
+            visMax = parseFloat($('i-vis-max').value); 
+            if(visMin > visMax) { 
+                if(document.activeElement.id === 'i-vis-min') { 
+                    visMax = visMin; $('i-vis-max').value = visMax; 
+                } else { 
+                    visMin = visMax; $('i-vis-min').value = visMin; 
+                } 
+            } 
+            $('l-vism').innerText = `${visMin.toFixed(2)} - ${visMax.toFixed(2)}`; 
+            meshes.forEach(m => { 
+                if(m.material.uniforms) { 
+                    m.material.uniforms.VIS_MIN.value = visMin; 
+                    m.material.uniforms.VIS_MAX.value = visMax; 
+                } 
+            }); 
+        };
+
+        function setupSliderListeners() {
+            $('i-res').onchange = e => { resizeSim(+e.target.value); };
+            
+            $('i-gap').oninput = e => { GAP = +e.target.value; $('l-gap').innerText = GAP; updTr(); syncE(); };
+            $('i-z').oninput = e => { ZSC = +e.target.value; $('l-z').innerText = ZSC.toFixed(1); };
+            $('i-li').oninput = e => { lInt = +e.target.value; $('l-li').innerText = lInt; };
+            $('i-vo').oninput = e => { var op = parseFloat(e.target.value); $('l-vo').innerText = op.toFixed(2); meshes.forEach(m => { if(m.material.uniforms && m.material.uniforms.uOpacity) { m.material.uniforms.uOpacity.value = op; }}); };
+            
+            const iVd = $('i-vd');
+            if (iVd) {
+                iVd.oninput = (e) => {
+                    VOL_LAYERS = +e.target.value; $('l-vd').innerText = VOL_LAYERS;
+                    if (IS_3D_MODE) {
+                        layers = []; for(let k=0; k<VOL_LAYERS; k++) { layers.push(defL(layerCounter++)); }
+                        initData(); 
+                    }
+                };
+            }
+            
+            const iPsz = $('i-psz');
+            const lPsz = $('l-psz');
+            if (iPsz && lPsz) {
+                iPsz.oninput = e => { 
+                    BASE_POINT_SETTINGS.pointSize = parseFloat(e.target.value); 
+                    lPsz.innerText = BASE_POINT_SETTINGS.pointSize.toFixed(1); 
+                    layers.forEach(l => l.pointSize = BASE_POINT_SETTINGS.pointSize);
+                    meshes.forEach(m => { if(m.material.uniforms) m.material.uniforms.uPointSize.value = BASE_POINT_SETTINGS.pointSize; }); 
+                };
+            }
+            const iPsc = $('i-psc');
+            const lPsc = $('l-psc');
+            if (iPsc && lPsc) {
+                 iPsc.oninput = e => { 
+                    BASE_POINT_SETTINGS.pointScaleFactor = parseFloat(e.target.value); 
+                    lPsc.innerText = BASE_POINT_SETTINGS.pointScaleFactor.toFixed(1); 
+                    layers.forEach(l => l.pointScaleFactor = BASE_POINT_SETTINGS.pointScaleFactor);
+                    meshes.forEach(m => { if(m.material.uniforms) m.material.uniforms.uPointScaleFactor.value = BASE_POINT_SETTINGS.pointScaleFactor; }); 
+                };
+            }
+            
+            $('i-vis-min').oninput = updVis; $('i-vis-max').oninput = updVis;
+            var sd = () => { var p=$('i-sp').value*0.01745, y=$('i-sy').value*0.01745; sunDir.set(Math.sin(p)*Math.sin(y), Math.cos(p), Math.sin(p)*Math.cos(y)).normalize(); };
+            $('i-sp').oninput = sd; $('i-sy').oninput = sd; sd();
+
+            EV('i-gden-abs', 'input', updateSimControls); EV('i-gden-ref', 'input', updateSimControls);
+            EV('btn-reset-global-den', 'click', resetGlobalDensity);
+            
+            ['b-dist','b-emit','b-den', 'b-sdf'].forEach(id => { 
+                const btn = $(id);
+                btn.onclick = function(){ 
+                    ['b-dist','b-emit','b-den', 'b-sdf'].forEach(b=>$(b).className=''); this.className='active';
+                    brush = btn.dataset.brush;
+                    const isSDF = (brush === 'SDF_PLACE');
+                    $('sdf-menu').style.display = isSDF ? 'block' : 'none';
+                    if (isSDF) { 
+                        updateSDFControls(); 
+                        renderSDFPreview(); 
+                        updateStampPreview();
+                    } else {
+                         scene.remove(stampPreviewMesh);
+                         stampPreviewMesh = null;
+                    }
+                    renderDynamicBrushControls(); 
+                };
+            });
+        }
+        
+        function setupCustomSliderDrag() {
+            const sliders = document.querySelectorAll('input[type="range"]');
+            sliders.forEach(slider => {
+                slider.classList.add('custom-drag-slider');
+            });
+
+            let activeSlider = null;
+            let startX = 0;
+            let startValue = 0;
+            const sensitivity = 250; 
+
+            const updateSliderValue = (e) => {
+                if (!activeSlider) return;
+                
+                const min = parseFloat(activeSlider.min || 0);
+                const max = parseFloat(activeSlider.max || 1);
+                const step = parseFloat(activeSlider.step || 0.01);
+                const range = max - min;
+                
+                const dx = e.clientX - startX;
+                const valueChange = (dx / sensitivity) * range;
+                
+                let newValue = startValue + valueChange;
+                
+                newValue = Math.max(min, Math.min(max, newValue));
+                
+                newValue = Math.round(newValue / step) * step;
+
+                activeSlider.value = newValue;
+                
+                const event = new Event('input', { bubbles: true });
+                activeSlider.dispatchEvent(event);
+
+                if (activeSlider.classList.contains('coupling-rate-slider')) {
+                    const index = parseInt(activeSlider.dataset.linkIndex);
+                    const property = activeSlider.dataset.linkProperty;
+                    
+                    if (!isNaN(index) && property === 'rate') {
+                        if (GLOBAL_COUPLING_LINKS[index]) {
+                             GLOBAL_COUPLING_LINKS[index].rate = newValue;
+                        }
+                        const label = $(`l_rate_${index}`);
+                        if (label) label.innerText = newValue.toFixed(4);
+                    }
+                }
+            };
+
+            const handleMouseMove = (e) => {
+                e.preventDefault(); 
+                if (activeSlider) {
+                    updateSliderValue(e);
+                }
+            };
+
+            const handleMouseUp = () => {
+                if (activeSlider) {
+                    const changeEvent = new Event('change', { bubbles: true });
+                    activeSlider.dispatchEvent(changeEvent);
+                    activeSlider = null;
+                    document.body.style.cursor = 'default';
+                }
+                window.removeEventListener('mousemove', handleMouseMove);
+                window.removeEventListener('mouseup', handleMouseUp);
+            };
+
+            const handleMouseDown = (e) => {
+                if (e.target.tagName !== 'INPUT' || e.target.type !== 'range') return;
+
+                if (e.target.classList.contains('custom-drag-slider')) {
+                    activeSlider = e.target;
+                    startX = e.clientX;
+                    startValue = parseFloat(activeSlider.value);
+
+                    document.body.style.cursor = 'ew-resize';
+                    window.addEventListener('mousemove', handleMouseMove);
+                    window.addEventListener('mouseup', handleMouseUp);
+                    e.preventDefault(); 
+                } else {
+                     activeSlider = null;
+                }
+            };
+            
+            document.querySelectorAll('.custom-drag-slider').forEach(slider => {
+                slider.removeEventListener('mousedown', handleMouseDown); 
+                slider.addEventListener('mousedown', handleMouseDown);
+            });
+        }
+        
+
+        function setupScene() {
+            canvasContainer = $('canvas-container');
+            const W = canvasContainer.clientWidth; const H = canvasContainer.clientHeight;
+            scene = new THREE.Scene(); scene.background = new THREE.Color(0x1a1d21); scene.fog = new THREE.Fog(0x1a1d21, 50, 150);
+            camera = new THREE.PerspectiveCamera(75, W / H, 0.1, 1000); TGT.set(0, 0, 0); updCam();
+            renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.setSize(W, H); renderer.setPixelRatio(window.devicePixelRatio); canvasContainer.appendChild(renderer.domElement);
+            raycaster = new THREE.Raycaster(); raycaster.layers.set(0); 
+            scene.add(new THREE.AmbientLight(0x404040)); scene.add(new THREE.DirectionalLight(0xffffff, 0.6));
+            window.addEventListener('resize', onResize, false);
+            
+            canvasContainer.addEventListener('mousedown', e => {
+                if(e.button===2) { isOrbit=true; mX=e.clientX; mY=e.clientY; return; }
+
+                if(e.button===1 || e.shiftKey) { isOrbit=true; mX=e.clientX; mY=e.clientY; return; }
+                
+                const hit = cast(e); 
+                const isEmitterHit = hit && hit.obj && hit.obj.userData.eid;
+
+                if (isEmitterHit) { 
+                    selectedEmitterId = hit.obj.userData.eid; 
+                    actEmitPart = hit.obj.userData.part; 
+                    updateEmitterInspector(); 
+                    syncE(); 
+                    isDrag = true; 
+                    
+                    if (IS_3D_MODE) {
+                        const emitterMesh = emitMeshes.find(m => m.userData.eid === selectedEmitterId && m.userData.part === actEmitPart);
+                        if (emitterMesh) {
+                            setupDragPlane(emitterMesh, hit.point);
+                        }
+                    }
+                    return; 
+                } 
+                
+                if (selectedEmitterId) { 
+                    selectedEmitterId = null; 
+                    updateEmitterInspector(); 
+                    syncE();
+                }
+
+                if (e.button === 0) {
+                    if (hit && hit.point) {
+                        sdfPlacementGrid = { i: hit.i, j: hit.j, lIdx: hit.lIdx };
+                    }
+                    
+                    if (brush === 'SDF_PLACE' && hit && $('sdf-menu').style.display === 'block') {
+                        
+                        let i = hit.i;
+                        let j = hit.j;
+                        let lIdx = hit.lIdx !== undefined ? hit.lIdx : (layers.findIndex(l => l.intr) || 0);
+
+                        if (IS_3D_MODE) {
+                            i = GRID / 2;
+                            j = GRID / 2;
+                        }
+                        
+                        placeShape(i, j, lIdx); 
+                        
+                        
+                        
+                        return; 
+                    }
+
+
+                    if (brush === 'DISTURBANCE' && hit && hit.point) {
+                        pulseStartTime = TIME; 
+                        interact(hit.i, hit.j, hit.lIdx);
+                        activeBrushHit = hit; 
+                        isContinuousBrushActive = true; 
+                        isDrag = true; 
+                    }
+                    else if (brush === 'DENSITY_PAINT' && hit && hit.point) {
+                        const targetLIdx = hit.lIdx !== undefined ? hit.lIdx : -1;
+                        interact(hit.i, hit.j, targetLIdx);
+                        isContinuousBrushActive = true; 
+                        isDrag = true;
+                        activeBrushHit = { i: hit.i, j: hit.j, lIdx: targetLIdx };
+                    }
+                    else if (brush === 'EMITTER_PLACE') { 
+                        let targetLIdx = IS_3D_MODE ? Math.floor(layers.length / 2) : (hit && hit.lIdx !== undefined ? hit.lIdx : 0);
+                        let startI = hit ? hit.i : GRID/2;
+                        let startJ = hit ? hit.j : GRID/2;
+                        
+                        if (IS_3D_MODE) {
+                             startI = GRID/2; startJ = GRID/2;
+                        }
+                        
+                        emits.push({ id: Date.now(), type: 'EMITTER_LINE_DRAG', shp: $('em-shp').value, st: parseFloat($('em-st').value), rt: parseFloat($('i-em-rt').value), off: parseFloat($('i-em-of').value), geo: 'POINT', i: startI, j: startJ, lIdx: targetLIdx, i2: startI, j2: startJ });
+                        selectedEmitterId = emits[emits.length - 1].id;
+                        actEmitPart = 'BODY';
+                        updateEmitterInspector();
+                        syncE();
+                        isDrag = true;
+                    }
+                }
+                if (e.button === 2) { isOrbit = true; }
+            });
+            
+            canvasContainer.addEventListener('mousemove', e => {
+                const dx = e.clientX - mX; const dy = e.clientY - mY; mX = e.clientX; mY = e.clientY;
+
+                if (isOrbit) { 
+                    theta -= dx * 0.5; 
+                    phi -= dy * 0.5; 
+                    updCam(); 
+                    return; 
+                }
+
+                if (!isDrag && brush !== 'SDF_PLACE') return; 
+
+                const hit = cast(e); 
+                
+                if (brush === 'SDF_PLACE' && $('sdf-menu').style.display === 'block') {
+                    if (hit && !IS_3D_MODE) { 
+                        sdfPlacementGrid = { i: hit.i, j: hit.j, lIdx: hit.lIdx }; 
+                    } else if (IS_3D_MODE) {
+                         sdfPlacementGrid = { i: GRID/2, j: GRID/2, lIdx: Math.floor(layers.length/2) }; 
+                    }
+                    updateStampPreview();
+                }
+                
+                if (selectedEmitterId && editEmitId) { 
+                    const em = emits.find(x => x.id === editEmitId); 
+                    if (!em) return;
+
+                    const mouse = nm(e);
+                    raycaster.setFromCamera(mouse, camera);
+                    
+                    let newPos = new THREE.Vector3();
+                    const intersection = raycaster.ray.intersectPlane(dragPlane, newPos);
+                    
+                    if (intersection) {
+                        newPos.sub(dragStartOffset);
+
+                        const DZ_LAYER = GAP * 0.1;
+                        const gridScale = 50.0 / (GRID - 1);
+                        
+                        const layerCenterY = gtw(GRID/2, GRID/2, Math.floor(layers.length / 2)).y;
+                        
+                        const { i: newI, j: newJ } = wtg(newPos.x, newPos.z);
+                        let newLIdx = Math.round((layerCenterY - newPos.y) / DZ_LAYER + Math.floor(layers.length / 2));
+                        
+                        newLIdx = Math.max(0, Math.min(layers.length - 1, newLIdx));
+                        
+                        const oldI = em.i, oldJ = em.j, oldL = em.lIdx;
+
+                        em.lIdx = newLIdx;
+                        
+                        if (em.geo === 'LINE') {
+                            if (actEmitPart === 'START') { em.i = newI; em.j = newJ; } 
+                            else if (actEmitPart === 'END') { em.i2 = newI; em.j2 = newJ; } 
+                            else { 
+                                const oldWorldPos = gtw(oldI, oldJ, oldL);
+                                
+                                const deltaX = newPos.x - oldWorldPos.x;
+                                const deltaZ = newPos.z - oldWorldPos.z;
+                                
+                                const gridDeltaI = Math.round(deltaZ / gridScale); 
+                                const gridDeltaJ = Math.round(deltaX / gridScale); 
+                                
+                                em.i = Math.max(1, Math.min(GRID-2, oldI + gridDeltaI));
+                                em.j = Math.max(1, Math.min(GRID-2, oldJ + gridDeltaJ));
+                                em.i2 = Math.max(1, Math.min(GRID-2, em.i2 + gridDeltaI));
+                                em.j2 = Math.max(1, Math.min(GRID-2, em.j2 + gridDeltaJ));
+                            }
+                        } else if (em.geo === 'POINT') { 
+                            em.i = newI; em.j = newJ; 
+                            em.i2 = newI; em.j2 = newJ; 
+                        }
+                        
+                    } 
+                    syncE(); 
+                }
+                
+                if (brush === 'DISTURBANCE' || brush === 'DENSITY_PAINT') {
+                    if (hit && hit.point) {
+                        const targetLIdx = hit.lIdx !== undefined ? hit.lIdx : (activeBrushHit ? activeBrushHit.lIdx : -1); 
+                        activeBrushHit = { i: hit.i, j: hit.j, lIdx: targetLIdx }; 
+                    }
+                }
+            });
+            
+            canvasContainer.addEventListener('mouseup', e => { 
+                isOrbit=false; 
+                isDrag = false;
+
+                if (e.button === 0) {
+                    const lastEmIdx = emits.findIndex(e => e.type === 'EMITTER_LINE_DRAG');
+                    if (lastEmIdx !== -1) { 
+                        emits[lastEmIdx].type = 'EMITTER'; 
+                        
+                        emits[lastEmIdx].geo = $('em-geo').value;
+                        if (emits[lastEmIdx].geo === 'POINT') {
+                             emits[lastEmIdx].i2 = emits[lastEmIdx].i;
+                             emits[lastEmIdx].j2 = emits[lastEmIdx].j;
+                        }
+                        selectedEmitterId = emits[lastEmIdx].id; 
+                        updateEmitterInspector(); 
+                        syncE();
+                    } 
+                }
+                
+                isContinuousBrushActive = false; 
+                activeBrushHit = null; 
+            });
+            
+            canvasContainer.addEventListener('wheel', e => { e.preventDefault(); rad *= (e.deltaY > 0 ? 1.1 : 0.9); updCam(); }, {passive:false});
+            
+            fullResetConfig(DEFAULT_STATE_CONFIG); 
+            loop();
+        }
+
+        function init() {
+            setupGlobalEvents();
+            setupSliderListeners();
+            setupCustomSliderDrag(); 
+            setupScene(); 
+            document.querySelector('#b-dist').click();
+            updateUI(); 
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
