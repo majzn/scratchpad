@@ -678,6 +678,37 @@
 								title="Max Threshold"
 							/>
 						</div>
+						
+						<h4 style="margin-top: 10px">Global Exposure</h4>
+
+						<label
+							>Exposure:
+							<span
+								id="l-exposure"
+								class="value-label"
+								>1.00</span
+							></label
+						>
+						<input
+							type="range"
+							id="i-exposure"
+							min="0.01"
+							max="1.5"
+							value="1.0"
+							step="0.01"
+						/>
+						<div class="row" style="margin-bottom: 8px;">
+							<input
+								type="checkbox"
+								id="cb-auto-exposure"
+								style="width: auto; margin: 0"
+							/>
+							<label
+								for="cb-auto-exposure"
+								style="margin-left: 4px; color: #fff"
+								>Auto Normalization (Anti-Blowout)</label
+							>
+						</div>
 
 						<label
 							>Global Opacity:
@@ -784,18 +815,6 @@
 									"
 								>
 									<div class="row">
-										<input
-											type="checkbox"
-											id="cb-additive"
-											checked
-											style="width: auto; margin: 0"
-										/>
-										<label
-											for="cb-additive"
-											style="margin-left: 4px; color: #fff"
-											>Additive (Glowing)</label
-										>
-
 										<input
 											type="checkbox"
 											id="cb-iso"
@@ -1139,7 +1158,8 @@
 					id="em-st-v"
 					class="value-label"
 				></span
-			></label>
+			></label
+			>
 			<input
 				type="range"
 				id="em-st"
@@ -1190,7 +1210,10 @@
 
 		<script>
 			var IS_ALPHA_MODULATION = true;
-			var IS_ADDITIVE_BLENDING = true;
+			var EXPOSURE = 1.0;
+			var AUTO_EXPOSURE = false;
+			var MAX_WAVE_ABS = 0.0;
+			var TARGET_MAX_INTENSITY = 10.0;
 			var $ = (id) => document.getElementById(id);
 			var EV = (id, t, fn) => {
 				const el = $(id);
@@ -1360,6 +1383,8 @@
 					sunYaw: 45,
 					GLOBAL_DEN_ABSORPTION: 0.0,
 					GLOBAL_DEN_REFRACTION: 1.0,
+					EXPOSURE: 1.0,
+					AUTO_EXPOSURE: false,
 				},
 				layers: [
 					{
@@ -1435,8 +1460,8 @@
             uniform float VIS_MIN; uniform float VIS_MAX;
             uniform float uOpacity;
             uniform float uPointFalloff;
-            
-                       uniform float uShowDensity; 
+            uniform float uShowDensity; 
+            uniform float uExposure; 
 
             vec3 spectral_phase(float t) {
                 vec3 a = vec3(0.5, 0.5, 0.5);
@@ -1505,12 +1530,10 @@
                     col = map * (vec3(0.4) + d * LIGHT_INTENSITY * 0.8);
                 }
                 
-                               if (uShowDensity > 0.5 && vDensity > 0.01) {
-                                       vec3 densityColor = vec3(0.6, 0.9, 1.0); 
-                    
-                                                          col = mix(col, densityColor, vDensity * 0.6); 
-                    
-                                       col += densityColor * vDensity * 0.3;
+                if (uShowDensity > 0.5 && vDensity > 0.01) {
+                    vec3 densityColor = vec3(0.6, 0.9, 1.0); 
+                    col = mix(col, densityColor, vDensity * 0.6); 
+                    col += densityColor * vDensity * 0.3;
                 }
 
                 float finalAlpha = uOpacity;
@@ -1523,8 +1546,8 @@
                     
                     float signalAlpha = smoothstep(0.005, 0.15, magnitude);
                     
-                                                          if (uShowDensity > 0.5) {
-                                                                      signalAlpha = max(signalAlpha, vDensity); 
+                    if (uShowDensity > 0.5) {
+                        signalAlpha = max(signalAlpha, vDensity); 
                     }
 
                     finalAlpha *= signalAlpha;
@@ -1538,29 +1561,25 @@
 				`
     uniform float uAlphaTest;
 		void main() {
-               vec4 c = calculateColor();
+        vec4 c = calculateColor();
         
-               if (uIsPoints) {
-                       vec2 coord = gl_PointCoord - vec2(0.5);
+        if (uIsPoints) {
+            vec2 coord = gl_PointCoord - vec2(0.5);
             
-                       float r = length(coord) * 2.0;
+            float r = length(coord) * 2.0;
             
-                       if (r > 1.0) discard;
+            if (r > 1.0) discard;
 
-                                                        float sharpness = 2.0 + (uPointFalloff * 10.0);
+            float sharpness = (uPointFalloff * 10.0);
             
-                      
             float g = exp(- (r * r) * sharpness);
             
-           						if (uAlphaTest > 0.1) {
-                 sharpness = 10.0; 
-                 g = smoothstep(1.0, 0.5, r); 
-            }
-
-                       c.a *= g;
+						c.a *= g;
         }
 
-       				if (c.a < uAlphaTest) discard;
+       	if (c.a < uAlphaTest) discard;
+        
+        c.rgb *= uExposure;
         
         gl_FragColor = c;
     }
@@ -2341,9 +2360,9 @@
 				meshes = [];
 				var volOpacity = parseFloat($("i-vo").value);
 				const vizCfg = BASE_LAYER_CFG;
-				var isAdditive = IS_ADDITIVE_BLENDING;
-				var depthWriteVal = !isAdditive;
-				var alphaTestVal = isAdditive ? 0.01 : 0.5;
+				var isAdditive = true; 
+				var depthWriteVal = false;
+				var alphaTestVal = 0.01; 
 
 				updateVolumeBox();
 
@@ -2413,6 +2432,7 @@
 						uIs3DPoints: { value: IS_3D_MODE && l.visMode === "POINTS" },
 						uAlphaTest: { value: alphaTestVal },
 						uShowDensity: { value: SHOW_DENSITY ? 1.0 : 0.0 },
+						uExposure: { value: EXPOSURE },
 					};
 
 					var m = new THREE.ShaderMaterial({
@@ -2448,9 +2468,7 @@
 						fragmentShader: defaultFs,
 						transparent: true,
 						side: 2,
-						blending: isAdditive
-							? THREE.AdditiveBlending
-							: THREE.NormalBlending,
+						blending: THREE.AdditiveBlending,
 						depthWrite: depthWriteVal,
 						depthTest: true,
 					});
@@ -2574,8 +2592,8 @@
 
 				TIME++;
 				var DT2 = DT_FACTOR * DT_FACTOR;
+				var max_wave_abs = 0.0;
 
-				// CFL stability check (Wave Equation only)
 				const maxC = IS_3D_MODE ? BASE_LAYER_CFG.C : layers.reduce((max, l) => Math.max(max, l.C), 0.0);
 				const dx = 50.0 / (GRID - 1);
 				const maxDtStable = dx / maxC;
@@ -2775,6 +2793,7 @@
 							if (VISCOSITY > 0) val -= (val - U_CURR) * VISCOSITY;
 							val = Math.max(-10.0, Math.min(10.0, val));
 							u_next_arr[ptr] = val;
+							max_wave_abs = Math.max(max_wave_abs, Math.abs(val));
 						}
 					}
 
@@ -2831,6 +2850,11 @@
 				u_prev = u;
 				u = u_aux;
 				u_aux = temp;
+				MAX_WAVE_ABS = max_wave_abs;
+			}
+
+			function lerp(a, b, t) {
+				return a + (b - a) * t;
 			}
 
 			function loop() {
@@ -2848,6 +2872,40 @@
 					sim();
 				}
 
+				if (AUTO_EXPOSURE) {
+					// 1. Estimate the maximum possible intensity of the current wave event
+					// This estimation must be based on the parameters that control color output:
+					// - MAX_WAVE_ABS (from physics)
+					// - IMPULSE_MAGNITUDE (user input scale factor)
+					// - ZSC (visual scale factor)
+					// - uPointScaleFactor (base point size/glow)
+					
+					// A normalized wave amplitude of 1.0 * IMPULSE_MAGNITUDE should produce a color of roughly 1.0 * uPointScaleFactor in the shader.
+					// MAX_WAVE_ABS is already normalized.
+					const maxWaveValue = Math.max(0.01, MAX_WAVE_ABS);
+					
+					// We estimate the maximum *visual intensity* that the current maximum wave will produce.
+					// This uses the scale factor from the wave height attribute (0.5) and the point scale factor (BASE_POINT_SETTINGS.pointScaleFactor)
+					// We use a small, fixed "Display Reference Max" (0.5) for comfortable viewing, which ensures the brightest point is mapped down.
+					const DisplayReferenceMax = 0.5;
+					
+					// Max visual intensity is roughly: (Max Wave Abs * ZScale Factor * Point Scale Factor)
+					// We use a safe scaling factor of 0.2 that loosely reflects the shader's internal scaling and the point brightness.
+					const maxVisualIntensity = maxWaveValue * 0.2 * BASE_POINT_SETTINGS.pointScaleFactor;
+					
+					// Target Exposure: Scale down current max intensity to meet the DisplayReferenceMax.
+					let targetExposure = DisplayReferenceMax / maxVisualIntensity;
+
+					// Clamp for stability, preventing extreme over-correction if maxVisualIntensity is tiny.
+					targetExposure = Math.max(0.01, Math.min(1.5, targetExposure)); 
+					
+					// Smoothly interpolate to the target exposure
+					EXPOSURE = lerp(EXPOSURE, targetExposure, 0.05);
+
+					$("i-exposure").value = EXPOSURE;
+					$("l-exposure").innerText = EXPOSURE.toFixed(2);
+				}
+				
 				if (
 					isContinuousBrushActive &&
 					(brush === "DISTURBANCE" || brush === "DENSITY_PAINT")
@@ -2901,6 +2959,7 @@
 						m.material.uniforms.uPointSize.value = l.pointSize;
 						m.material.uniforms.uPointScaleFactor.value = l.pointScaleFactor;
 						m.material.uniforms.uPointFalloff.value = l.pointFalloff;
+						m.material.uniforms.uExposure.value = EXPOSURE;
 					}
 				});
 				updCam();
@@ -3201,6 +3260,8 @@
 						sunYaw: +$("i-sy").value,
 						GLOBAL_DEN_ABSORPTION: GLOBAL_DEN_ABSORPTION,
 						GLOBAL_DEN_REFRACTION: GLOBAL_DEN_REFRACTION,
+						EXPOSURE: EXPOSURE,
+						AUTO_EXPOSURE: AUTO_EXPOSURE,
 					},
 					layers: layers.map((l) => ({
 						...l,
@@ -3260,6 +3321,11 @@
 					cfg.global.GLOBAL_DEN_REFRACTION ||
 					DEFAULT_STATE_CONFIG.global.GLOBAL_DEN_REFRACTION;
 				$("i-gden-ref").value = GLOBAL_DEN_REFRACTION;
+
+				EXPOSURE = cfg.global.EXPOSURE || DEFAULT_STATE_CONFIG.global.EXPOSURE;
+				$("i-exposure").value = EXPOSURE;
+				AUTO_EXPOSURE = cfg.global.AUTO_EXPOSURE || DEFAULT_STATE_CONFIG.global.AUTO_EXPOSURE;
+				$("cb-auto-exposure").checked = AUTO_EXPOSURE;
 
 				$("i-sp").value =
 					cfg.global.sunPitch || DEFAULT_STATE_CONFIG.global.sunPitch;
@@ -3384,6 +3450,11 @@
 					cfg.global.GLOBAL_DEN_REFRACTION ||
 					DEFAULT_STATE_CONFIG.global.GLOBAL_DEN_REFRACTION;
 				$("i-gden-ref").value = GLOBAL_DEN_REFRACTION;
+				
+				EXPOSURE = cfg.global.EXPOSURE || DEFAULT_STATE_CONFIG.global.EXPOSURE;
+				$("i-exposure").value = EXPOSURE;
+				AUTO_EXPOSURE = cfg.global.AUTO_EXPOSURE || DEFAULT_STATE_CONFIG.global.AUTO_EXPOSURE;
+				$("cb-auto-exposure").checked = AUTO_EXPOSURE;
 
 				$("i-sp").value =
 					cfg.global.sunPitch || DEFAULT_STATE_CONFIG.global.sunPitch;
@@ -3517,6 +3588,7 @@
 				emits = emits.filter((e) => e.type !== "EMITTER_LINE_DRAG");
 				u.forEach((arr) => arr.fill(0));
 				u_prev.forEach((arr) => arr.fill(0));
+				MAX_WAVE_ABS = 0.0;
 				selectedEmitterId = null;
 				updateEmitterInspector();
 				syncE();
@@ -3739,7 +3811,7 @@
 					const linkDiv = document.createElement("div");
 					linkDiv.className = "coupling-link";
 
-const layerOptions = layers
+					const layerOptions = layers
 						.map((l, i) => {
 							const name = l.name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 							const optionText = `Layer ${i + 1} (${name})`;
@@ -4005,6 +4077,7 @@ const layerOptions = layers
 				renderDynamicBrushControls();
 				renderVolGradientControls();
 
+				$("l-exposure").innerText = EXPOSURE.toFixed(2);
 				$("l-gap").innerText = GAP;
 				$("l-z").innerText = ZSC.toFixed(1);
 				$("l-li").innerText = lInt;
@@ -4312,6 +4385,21 @@ const layerOptions = layers
 					});
 				};
 
+				$("i-exposure").oninput = (e) => {
+					EXPOSURE = parseFloat(e.target.value);
+					$("l-exposure").innerText = EXPOSURE.toFixed(2);
+					meshes.forEach((m) => {
+						if (m.material.uniforms && m.material.uniforms.uExposure) {
+							m.material.uniforms.uExposure.value = EXPOSURE;
+						}
+					});
+				};
+
+				$("cb-auto-exposure").onchange = (e) => {
+					AUTO_EXPOSURE = e.target.checked;
+					$("i-exposure").disabled = AUTO_EXPOSURE;
+				};
+
 				const iVd = $("i-vd");
 				if (iVd) {
 					iVd.oninput = (e) => {
@@ -4342,16 +4430,6 @@ const layerOptions = layers
 						updateVolumeBox();
 					};
 				}
-
-				const cbAdd = $("cb-additive");
-				if (cbAdd) {
-					cbAdd.onchange = (e) => {
-						IS_ADDITIVE_BLENDING = e.target.checked;
-						syncM();
-					};
-				}
-
-				if (cbAdd) IS_ADDITIVE_BLENDING = cbAdd.checked;
 
 				const cbModAlpha = $("cb-mod-alpha");
 				if (cbModAlpha) {
