@@ -1213,7 +1213,6 @@
 			var EXPOSURE = 1.0;
 			var AUTO_EXPOSURE = false;
 			var MAX_WAVE_ABS = 0.0;
-			var TARGET_MAX_INTENSITY = 10.0;
 			var $ = (id) => document.getElementById(id);
 			var EV = (id, t, fn) => {
 				const el = $(id);
@@ -1261,6 +1260,7 @@
 			var layerCounter = 0;
 			var visMin = 0.0,
 				visMax = 1.0;
+            var cubeRenderTarget = null; 
 
 			var IMPULSE_MAGNITUDE = 5.0;
 			var IS_IMPULSE_HOLD = false;
@@ -1450,10 +1450,65 @@
 				volumeBoxMesh.position.set(0, 0, 0);
 				scene.add(volumeBoxMesh);
 			}
+            
+            // --- CUBEMAP LOADING/FALLBACK SETUP ---
+            
+            // Function to create a placeholder black cubemap texture
+            function createBlackCubemap() {
+                const size = 1;
+                const data = new Uint8Array([0, 0, 0]); // Single black pixel
+                const texture = new THREE.DataTexture(data, size, size, THREE.RGBFormat);
+                texture.needsUpdate = true;
+
+                const textures = [];
+                for(let i = 0; i < 6; i++) {
+                    textures.push(texture.image);
+                }
+                
+                return new THREE.CubeTexture(textures, THREE.CubeReflectionMapping);
+            }
+
+            // Function to load skybox.png (6x1 horizontal strip)
+            function loadSkybox() {
+                const loader = new THREE.CubeTextureLoader();
+                // Assumed face order for horizontal strip: px, nx, py, ny, pz, nz
+                // We use the same single PNG for all faces, relying on Three.js's loader to slice it.
+                // NOTE: Since direct loading from the sandbox is complex, we simulate the environment loading structure 
+                // by using an Array of paths for the CubeTextureLoader, which will load the single PNG if available.
+                // However, without a physical filesystem here, we rely on the loader's error handling.
+                
+                const filePaths = ['skybox.png', 'skybox.png', 'skybox.png', 'skybox.png', 'skybox.png', 'skybox.png'];
+                
+                loader.load(filePaths, 
+                    // Success handler
+                    (texture) => {
+                        texture.mapping = THREE.CubeReflectionMapping;
+                        cubeRenderTarget = texture;
+                        scene.background = cubeRenderTarget;
+                        scene.environment = cubeRenderTarget;
+                        syncM(); // Update materials with the new cubemap
+                    }, 
+                    // Progress handler (optional)
+                    undefined,
+                    // Error handler
+                    (err) => {
+                        console.warn('Skybox loading failed (skybox.png not found or inaccessible). Falling back to black background.');
+                        cubeRenderTarget = createBlackCubemap();
+                        scene.background = new THREE.Color(0x000000);
+                        scene.environment = cubeRenderTarget; // Still provide a placeholder cubemap uniform
+                        syncM();
+                    }
+                );
+            }
+            
+            // --- END CUBEMAP LOADING/FALLBACK SETUP ---
+            
 			var GLSL_SHADE_FUNC = `
             uniform bool uIsPoints;
             uniform bool uModulateAlpha;
             varying vec3 vNormal; uniform vec3 SUN_DIR; uniform float LIGHT_INTENSITY;
+            varying vec3 vViewDir;
+            uniform samplerCube tCube; // New Cubemap Uniform
             uniform int SHADING_MODE; varying float vWaveHeight; varying float vWaveVelocity; varying float vDensity;
             uniform float GRADIENT_BIAS; uniform float GRADIENT_CONTRAST;
             uniform vec3 GRADIENT_STOPS[8]; uniform int GRADIENT_STOPS_COUNT;
@@ -1485,6 +1540,12 @@
                 int idx_l = int(floor(idx_f)); int idx_h = int(ceil(idx_f));
                 return mix(GRADIENT_STOPS[idx_l], GRADIENT_STOPS[idx_h], fract(idx_f));
             }
+            
+            float fresnel(vec3 N, vec3 V, float IoR) {
+                float cosTheta = clamp(dot(N, V), 0.0, 1.0);
+                float R0 = pow((1.0 - IoR) / (1.0 + IoR), 2.0);
+                return R0 + (1.0 - R0) * pow(1.0 - cosTheta, 5.0);
+            }
 
             vec4 calculateColor() {
                 float raw = 0.0;
@@ -1501,11 +1562,43 @@
                 float energyEnvelope = 0.0;
                 
                 if (SHADING_MODE == 0) { 
-                    vec3 base = GRADIENT_STOPS[0]; 
-                    float d = max(0.0, dot(vNormal, SUN_DIR)); 
-                    vec3 R = reflect(-SUN_DIR, vNormal);
-                    float spec = pow(max(0.0, dot(R, normalize(vec3(1.0, 1.5, 1.0)))), 15.0); 
-                    col = base * (vec3(0.4) + vec3(d) * LIGHT_INTENSITY) + vec3(1.0) * spec * LIGHT_INTENSITY; 
+                    // Realistic Water Reflection Model
+                    
+                    vec3 N = normalize(vNormal);
+                    vec3 V = normalize(vViewDir);
+                    vec3 L = SUN_DIR; 
+                    
+                    vec3 baseColor = GRADIENT_STOPS[0];
+                    float IoR = 1.33; // Water
+                    
+                    // Diffuse Lighting (Lambertian)
+                    float NdotL = max(0.0, dot(N, L));
+                    // Base color (darkened blue/teal) for shallow/deep water appearance
+                    vec3 waterBase = baseColor * 0.5 + vec3(0.05, 0.15, 0.2); 
+                    vec3 diffuse = waterBase * (vec3(0.4) + NdotL * LIGHT_INTENSITY * 0.8);
+
+                    // Blinn-Phong Specular
+                    vec3 H = normalize(L + V);
+                    float NdotH = max(0.0, dot(N, H));
+                    float shininess = 150.0; // Sharper highlight for water
+                    float specular = pow(NdotH, shininess) * LIGHT_INTENSITY;
+                    vec3 specularColor = vec3(1.0); 
+
+                    // Fresnel Reflection (controls the blend between base and reflection)
+                    float F = fresnel(N, V, IoR);
+                    
+                    // Cube Map Reflection
+                    vec3 R = reflect(-V, N);
+                    vec3 reflection = textureCube(tCube, R).rgb;
+                    
+                    // Combine: Diffuse + Specular + Reflection (blended by Fresnel)
+                    // Fresnel controls reflection strength (strong at edges)
+                    vec3 baseLight = diffuse + specularColor * specular;
+                    col = mix(baseLight, reflection, F);
+                    
+                    // Add a slight dark tint for refraction/depth
+                    col *= (1.0 - F * 0.1); 
+
                 } 
                 else if (SHADING_MODE == 4) { 
                     float v = clamp(vWaveHeight * 0.5, -1.0, 1.0);
@@ -1538,7 +1631,10 @@
 
                 float finalAlpha = uOpacity;
 
-                if (uIsPoints && uModulateAlpha) {
+                // FIX: Ensure full opacity if uOpacity is set to max, overriding point modulation.
+                if (uOpacity >= 0.999) {
+                    finalAlpha = 1.0;
+                } else if (uIsPoints && uModulateAlpha) {
                     float magnitude = 0.0;
                     if (SHADING_MODE == 5) magnitude = energyEnvelope;
                     else if (SHADING_MODE == 2) magnitude = abs(vWaveVelocity) * 4.0; 
@@ -1570,11 +1666,11 @@
             
             if (r > 1.0) discard;
 
-            float sharpness = (uPointFalloff * 10.0);
+            float sharpness = 2.0 + (uPointFalloff * 10.0);
             
             float g = exp(- (r * r) * sharpness);
             
-						c.a *= g;
+            c.a *= g;
         }
 
        	if (c.a < uAlphaTest) discard;
@@ -2283,6 +2379,7 @@
 			}
 			function updTr() {
 				const gridStep = 50.0 / (GRID > 1 ? GRID - 1 : 1);
+
 				const verticalSpacing = IS_3D_MODE ? gridStep : GAP * 0.1;
 
 				const totalHeight = (layers.length - 1) * verticalSpacing;
@@ -2360,9 +2457,11 @@
 				meshes = [];
 				var volOpacity = parseFloat($("i-vo").value);
 				const vizCfg = BASE_LAYER_CFG;
-				var isAdditive = true; 
-				var depthWriteVal = false;
-				var alphaTestVal = 0.01; 
+				
+				// Conditional settings for full opacity vs. additive transparency
+				var isAdditive = volOpacity < 1.0; 
+				var depthWriteVal = volOpacity >= 1.0; // Opaque surfaces must write depth
+				var alphaTestVal = volOpacity >= 1.0 ? 0.0 : 0.01; 
 
 				updateVolumeBox();
 
@@ -2433,6 +2532,7 @@
 						uAlphaTest: { value: alphaTestVal },
 						uShowDensity: { value: SHOW_DENSITY ? 1.0 : 0.0 },
 						uExposure: { value: EXPOSURE },
+                        tCube: { value: cubeRenderTarget || createBlackCubemap() }
 					};
 
 					var m = new THREE.ShaderMaterial({
@@ -2445,15 +2545,14 @@
                 uniform bool uIsPoints; uniform float uPointSize; uniform bool uIs3D; uniform float uPointScaleFactor;
                 uniform bool uIs3DPoints;
                 void main(){ 
+                    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+                    if (!uIs3DPoints) { 
+                        worldPosition.y += waveHeight * 2.0 * ${ZSC * 0.05}; 
+                    }
+
                     vNormal=normalize(mat3(modelMatrix)*normal); 
                     vWaveHeight=waveHeight; vWaveVelocity=waveVelocity; vDensity=aDensity; 
                     
-                    vec4 position_offset = vec4(position, 1.0);
-                    if (!uIs3DPoints) { 
-                        position_offset.y += waveHeight * 2.0 * ${ZSC * 0.05}; 
-                    }
-                    
-                    vec4 worldPosition = modelMatrix * position_offset;
                     vViewDir = normalize(cameraPosition - worldPosition.xyz);
 
                     vec4 mvPosition = viewMatrix * worldPosition;
@@ -2468,7 +2567,7 @@
 						fragmentShader: defaultFs,
 						transparent: true,
 						side: 2,
-						blending: THREE.AdditiveBlending,
+						blending: volOpacity >= 1.0 ? THREE.NormalBlending : THREE.AdditiveBlending,
 						depthWrite: depthWriteVal,
 						depthTest: true,
 					});
@@ -2480,6 +2579,7 @@
 						mesh = new THREE.Points(g, m);
 					}
 					mesh.userData = { lid: l.id, idx: i, visMode: l.visMode };
+                    mesh.renderOrder = i;
 					scene.add(mesh);
 					meshes.push(mesh);
 				});
@@ -2873,33 +2973,17 @@
 				}
 
 				if (AUTO_EXPOSURE) {
-					// 1. Estimate the maximum possible intensity of the current wave event
-					// This estimation must be based on the parameters that control color output:
-					// - MAX_WAVE_ABS (from physics)
-					// - IMPULSE_MAGNITUDE (user input scale factor)
-					// - ZSC (visual scale factor)
-					// - uPointScaleFactor (base point size/glow)
 					
-					// A normalized wave amplitude of 1.0 * IMPULSE_MAGNITUDE should produce a color of roughly 1.0 * uPointScaleFactor in the shader.
-					// MAX_WAVE_ABS is already normalized.
 					const maxWaveValue = Math.max(0.01, MAX_WAVE_ABS);
 					
-					// We estimate the maximum *visual intensity* that the current maximum wave will produce.
-					// This uses the scale factor from the wave height attribute (0.5) and the point scale factor (BASE_POINT_SETTINGS.pointScaleFactor)
-					// We use a small, fixed "Display Reference Max" (0.5) for comfortable viewing, which ensures the brightest point is mapped down.
 					const DisplayReferenceMax = 0.5;
 					
-					// Max visual intensity is roughly: (Max Wave Abs * ZScale Factor * Point Scale Factor)
-					// We use a safe scaling factor of 0.2 that loosely reflects the shader's internal scaling and the point brightness.
 					const maxVisualIntensity = maxWaveValue * 0.2 * BASE_POINT_SETTINGS.pointScaleFactor;
 					
-					// Target Exposure: Scale down current max intensity to meet the DisplayReferenceMax.
 					let targetExposure = DisplayReferenceMax / maxVisualIntensity;
 
-					// Clamp for stability, preventing extreme over-correction if maxVisualIntensity is tiny.
 					targetExposure = Math.max(0.01, Math.min(1.5, targetExposure)); 
 					
-					// Smoothly interpolate to the target exposure
 					EXPOSURE = lerp(EXPOSURE, targetExposure, 0.05);
 
 					$("i-exposure").value = EXPOSURE;
@@ -3450,7 +3534,7 @@
 					cfg.global.GLOBAL_DEN_REFRACTION ||
 					DEFAULT_STATE_CONFIG.global.GLOBAL_DEN_REFRACTION;
 				$("i-gden-ref").value = GLOBAL_DEN_REFRACTION;
-				
+
 				EXPOSURE = cfg.global.EXPOSURE || DEFAULT_STATE_CONFIG.global.EXPOSURE;
 				$("i-exposure").value = EXPOSURE;
 				AUTO_EXPOSURE = cfg.global.AUTO_EXPOSURE || DEFAULT_STATE_CONFIG.global.AUTO_EXPOSURE;
@@ -4383,6 +4467,7 @@
 							m.material.uniforms.uOpacity.value = op;
 						}
 					});
+                    syncM(); // Resync materials when opacity changes (to toggle depthWrite/Blending)
 				};
 
 				$("i-exposure").oninput = (e) => {
@@ -4519,7 +4604,7 @@
 							}
 						}
 
-						syncE();
+						syncM();
 
 						renderDynamicBrushControls();
 					};
@@ -4622,7 +4707,6 @@
 				const W = canvasContainer.clientWidth;
 				const H = canvasContainer.clientHeight;
 				scene = new THREE.Scene();
-				scene.background = new THREE.Color(0x1a1d21);
 				scene.fog = new THREE.Fog(0x1a1d21, 50, 150);
 				camera = new THREE.PerspectiveCamera(75, W / H, 0.1, 1000);
 				TGT.set(0, 0, 0);
@@ -4630,13 +4714,37 @@
 				renderer = new THREE.WebGLRenderer({ antialias: true });
 				renderer.setSize(W, H);
 				renderer.setPixelRatio(window.devicePixelRatio);
+                renderer.sortObjects = false; // Disable automatic object sorting
 				canvasContainer.appendChild(renderer.domElement);
 				raycaster = new THREE.Raycaster();
 				raycaster.layers.set(0);
 				scene.add(new THREE.AmbientLight(0x404040));
 				scene.add(new THREE.DirectionalLight(0xffffff, 0.6));
 				window.addEventListener("resize", onResize, false);
-
+                
+                // 1. Load skybox.png (6x1 horizontal strip)
+                const loader = new THREE.CubeTextureLoader();
+                const filePaths = ['skybox.png', 'skybox.png', 'skybox.png', 'skybox.png', 'skybox.png', 'skybox.png'];
+                
+                loader.load(filePaths, 
+                    // Success handler
+                    (texture) => {
+                        texture.mapping = THREE.CubeReflectionMapping;
+                        cubeRenderTarget = texture;
+                        scene.background = cubeRenderTarget;
+                        scene.environment = cubeRenderTarget;
+                        syncM(); // Update materials with the new cubemap
+                    }, 
+                    // Error handler (Fallback to black)
+                    (err) => {
+                        console.warn('Skybox loading failed (skybox.png not found or inaccessible). Falling back to black background.');
+                        cubeRenderTarget = createBlackCubemap();
+                        scene.background = new THREE.Color(0x000000);
+                        scene.environment = cubeRenderTarget; 
+                        syncM();
+                    }
+                );
+                
 				canvasContainer.addEventListener("mousedown", (e) => {
 					if (e.button === 2) {
 						isOrbit = true;
@@ -4937,7 +5045,8 @@
 				setupGlobalEvents();
 				setupSliderListeners();
 				setupCustomSliderDrag();
-				setupScene();
+				loadSkybox(); // Initiate skybox loading first
+				setupScene(); // Scene setup relies on loadSkybox filling cubeRenderTarget
 				document.querySelector("#b-dist").click();
 				updateUI();
 			}
