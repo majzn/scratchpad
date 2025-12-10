@@ -1727,7 +1727,7 @@ vec4 calculateColor(bool isPoints, float pointFalloff, bool modulateAlpha) {
 
     float finalAlpha = uOpacity;
 
-    if (modulateAlpha && isPoints && uOpacity < 0.999) {
+    if (modulateAlpha && isPoints) {
         float magnitude = 0.0;
         if (SHADING_MODE == 5) magnitude = energyEnvelope;
         else if (SHADING_MODE == 2) magnitude = abs(vWaveVelocity) * 4.0; 
@@ -2637,10 +2637,7 @@ void main() {
 					fragmentShader: GLSL_POINTS_FS,
 					transparent: true,
 					side: 2,
-					blending:
-						baseUniforms.uOpacity.value >= 1.0
-							? THREE.NormalBlending
-							: THREE.AdditiveBlending,
+					blending: THREE.AdditiveBlending,
 					depthWrite: false,
 					depthTest: true,
 				});
