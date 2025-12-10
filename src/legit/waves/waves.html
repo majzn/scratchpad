@@ -6,7 +6,7 @@
 			name="viewport"
 			content="width=device-width, initial-scale=1.0"
 		/>
-		<title>Physics Sandbox 3D (Enhanced)</title>
+		<title>Physics Sandbox 3D (Refactored)</title>
 		<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 		<style>
 			:root {
@@ -115,6 +115,12 @@
 				height: var(--input-height);
 				box-sizing: border-box;
 				border-radius: 4px;
+			}
+
+			textarea {
+				height: 60px;
+				resize: vertical;
+				line-height: 1.2;
 			}
 
 			input:focus,
@@ -502,6 +508,53 @@
 					</div>
 				</div>
 
+				<div id="custom-model-group">
+					<div
+						class="expandable-header"
+						data-target="custom-model-content"
+					>
+						Custom Model Editor <span class="expand-arrow">&#x25B8;</span>
+					</div>
+					<div
+						id="custom-model-content"
+						class="expandable-content"
+					>
+						<label>Formula Name</label>
+						<input
+							type="text"
+							id="custom-name"
+							value="My Custom Model"
+							style="height: auto; padding: 4px"
+						/>
+						<label style="margin-top: 8px"
+							>Custom Variables (e.g., G=0.01; R=0.5;)</label
+						>
+						<textarea
+							id="custom-vars"
+							placeholder="G=0.01; NL=5.0;..."
+						></textarea>
+						<label style="margin-top: 8px"
+							>Formula Code (u_next = ...;)</label
+						>
+						<textarea
+							id="custom-code"
+							placeholder="(2*U_CURR - U_PREV) + C_final*LAP*DT2 - D_final*(U_CURR - U_PREV) + G*U_CURR^3;"
+						></textarea>
+						<label style="color: #9cf; margin-top: 8px; font-weight: normal"
+							>Vars: U_CURR, U_PREV, LAP, DT_FACTOR, C_final, D_final,
+							COUPLING_TERM, EXT_COUPLING, [Custom Vars]</label
+						>
+						<div
+							class="row"
+							style="margin-top: 8px"
+						>
+							<button id="btn-test-formula">Test Formula</button>
+							<button id="btn-save-formula">Save Formula</button>
+							<button id="btn-load-formula">Load Formula</button>
+						</div>
+					</div>
+				</div>
+
 				<div id="global-coupling-group">
 					<div
 						class="expandable-header"
@@ -726,6 +779,24 @@
 							value="0.5"
 							step="0.01"
 						/>
+						
+						<h4 style="margin-top: 10px">Reflectivity & Lighting</h4>
+						<label
+							>Surface Reflectivity:
+							<span
+								id="l-refl"
+								class="value-label"
+								>0.80</span
+							></label
+						>
+						<input
+							type="range"
+							id="i-refl"
+							min="0.0"
+							max="1.0"
+							value="0.8"
+							step="0.01"
+						/>
 
 						<label
 							>Lighting Intensity:
@@ -849,7 +920,7 @@
 									id="l-vd"
 									class="value-label"
 									>40</span
-								></label
+							></label
 							>
 							<input
 								type="range"
@@ -866,7 +937,7 @@
 									id="l-psz"
 									class="value-label"
 									>2.0</span
-								></label
+							></label
 							>
 							<input
 								type="range"
@@ -883,7 +954,7 @@
 									id="l-psc"
 									class="value-label"
 									>3.5</span
-								></label
+							></label
 							>
 							<input
 								type="range"
@@ -900,7 +971,7 @@
 									id="l-pf"
 									class="value-label"
 									>0.50</span
-								></label
+							></label
 							>
 							<input
 								type="range"
@@ -938,7 +1009,7 @@
 									id="l-vol-gb"
 									class="value-label"
 									>0.00</span
-								></label
+							></label
 							>
 							<input
 								type="range"
@@ -955,7 +1026,7 @@
 									id="l-vol-gc"
 									class="value-label"
 									>1.0</span
-								></label
+							></label
 							>
 							<input
 								type="range"
@@ -1108,7 +1179,7 @@
 					id="l-sdf-den"
 					class="value-label"
 					>1.00</span
-				></label
+			></label
 			>
 			<input
 				type="range"
@@ -1177,9 +1248,9 @@
 			><input
 				type="range"
 				id="i-em-rt"
-				min="10"
-				max="500"
-				step="10"
+				min="2"
+				max="256"
+				step="2"
 			/>
 			<label
 				>Phase Offset:
@@ -1232,6 +1303,7 @@
 				u_prev = [],
 				u_aux = [],
 				den = [],
+				layerDensityModulations = [],
 				meshes = [],
 				emitMeshes = [],
 				obsMeshes = [];
@@ -1260,7 +1332,7 @@
 			var layerCounter = 0;
 			var visMin = 0.0,
 				visMax = 1.0;
-            var cubeRenderTarget = null; 
+			var cubeRenderTarget = null;
 
 			var IMPULSE_MAGNITUDE = 5.0;
 			var IS_IMPULSE_HOLD = false;
@@ -1343,6 +1415,21 @@
 					C_max: 0.3,
 					D_max: 0.1,
 				},
+				CUSTOM: {
+					name: "Custom Model",
+					defaultC: 0.25,
+					defaultD: 0.005,
+					C_label: "Base C",
+					D_label: "Base D",
+					C_max: 0.5,
+					D_max: 0.1,
+				},
+			};
+
+			const COUPLING_TYPES = {
+				ENERGY_EXCHANGE: "Symmetric Energy Exchange",
+				MODULATE_DENSITY: "Modulate Target Density",
+				APPLY_FORCE: "Apply Velocity Force (Legacy)",
 			};
 
 			const BASE_LAYER_CFG = {
@@ -1367,6 +1454,18 @@
 				pointFalloff: BASE_POINT_SETTINGS.pointFalloff,
 			};
 
+			const DEFAULT_CUSTOM_FORMULA = {
+				name: "Non-Linear Wave Equation",
+				variables: "G=0.01;",
+				code: "2*U_CURR - U_PREV + C_final*LAP*DT_FACTOR*DT_FACTOR - D_final*(U_CURR - U_PREV) + G*U_CURR*U_CURR*U_CURR + COUPLING_TERM + EXT_COUPLING",
+			};
+
+			var GLOBAL_CUSTOM_FORMULA = { ...DEFAULT_CUSTOM_FORMULA };
+			var COMPILED_CUSTOM_FUNCTION = null;
+			var FORMULA_ERROR = null;
+
+			var REFLECTIVITY = 0.8; 
+
 			const DEFAULT_STATE_CONFIG = {
 				global: {
 					GRID: 80,
@@ -1375,6 +1474,7 @@
 					DT_FACTOR: 1.0,
 					VISCOSITY: 0.0,
 					lInt: 1.0,
+					REFLECTIVITY: 0.8,
 					visMin: 0.0,
 					visMax: 1.0,
 					IS_3D_MODE: false,
@@ -1401,6 +1501,7 @@
 				camera: { rad: 60, theta: 45, phi: 60 },
 				globalDen: Array.from(new Float32Array(80 * 80).fill(0)),
 				globalCoupling: [],
+				customFormula: { ...DEFAULT_CUSTOM_FORMULA },
 			};
 
 			var PRESETS = { DEFAULT_WAVE: DEFAULT_STATE_CONFIG };
@@ -1450,235 +1551,301 @@
 				volumeBoxMesh.position.set(0, 0, 0);
 				scene.add(volumeBoxMesh);
 			}
-            
-            // --- CUBEMAP LOADING/FALLBACK SETUP ---
-            
-            // Function to create a placeholder black cubemap texture
-            function createBlackCubemap() {
-                const size = 1;
-                const data = new Uint8Array([0, 0, 0]); // Single black pixel
-                const texture = new THREE.DataTexture(data, size, size, THREE.RGBFormat);
-                texture.needsUpdate = true;
 
-                const textures = [];
-                for(let i = 0; i < 6; i++) {
-                    textures.push(texture.image);
-                }
-                
-                return new THREE.CubeTexture(textures, THREE.CubeReflectionMapping);
-            }
+			function createBlackCubemap() {
+				const size = 1;
+				const data = new Uint8Array([0, 0, 0]);
+				const texture = new THREE.DataTexture(data, size, size, THREE.RGBFormat);
+				texture.needsUpdate = true;
 
-            // Function to load skybox.png (6x1 horizontal strip)
-            function loadSkybox() {
-                const loader = new THREE.CubeTextureLoader();
-                // Assumed face order for horizontal strip: px, nx, py, ny, pz, nz
-                // We use the same single PNG for all faces, relying on Three.js's loader to slice it.
-                // NOTE: Since direct loading from the sandbox is complex, we simulate the environment loading structure 
-                // by using an Array of paths for the CubeTextureLoader, which will load the single PNG if available.
-                // However, without a physical filesystem here, we rely on the loader's error handling.
-                
-                const filePaths = ['skybox.png', 'skybox.png', 'skybox.png', 'skybox.png', 'skybox.png', 'skybox.png'];
-                
-                loader.load(filePaths, 
-                    // Success handler
-                    (texture) => {
-                        texture.mapping = THREE.CubeReflectionMapping;
-                        cubeRenderTarget = texture;
-                        scene.background = cubeRenderTarget;
-                        scene.environment = cubeRenderTarget;
-                        syncM(); // Update materials with the new cubemap
-                    }, 
-                    // Progress handler (optional)
-                    undefined,
-                    // Error handler
-                    (err) => {
-                        console.warn('Skybox loading failed (skybox.png not found or inaccessible). Falling back to black background.');
-                        cubeRenderTarget = createBlackCubemap();
-                        scene.background = new THREE.Color(0x000000);
-                        scene.environment = cubeRenderTarget; // Still provide a placeholder cubemap uniform
-                        syncM();
-                    }
-                );
-            }
-            
-            // --- END CUBEMAP LOADING/FALLBACK SETUP ---
-            
-			var GLSL_SHADE_FUNC = `
-            uniform bool uIsPoints;
-            uniform bool uModulateAlpha;
-            varying vec3 vNormal; uniform vec3 SUN_DIR; uniform float LIGHT_INTENSITY;
-            varying vec3 vViewDir;
-            uniform samplerCube tCube; // New Cubemap Uniform
-            uniform int SHADING_MODE; varying float vWaveHeight; varying float vWaveVelocity; varying float vDensity;
-            uniform float GRADIENT_BIAS; uniform float GRADIENT_CONTRAST;
-            uniform vec3 GRADIENT_STOPS[8]; uniform int GRADIENT_STOPS_COUNT;
-            uniform float VIS_MIN; uniform float VIS_MAX;
-            uniform float uOpacity;
-            uniform float uPointFalloff;
-            uniform float uShowDensity; 
-            uniform float uExposure; 
+				const textures = [];
+				for (let i = 0; i < 6; i++) {
+					textures.push(texture.image);
+				}
 
-            vec3 spectral_phase(float t) {
-                vec3 a = vec3(0.5, 0.5, 0.5);
-                vec3 b = vec3(0.5, 0.5, 0.5);
-                vec3 c = vec3(1.0, 1.0, 1.0);
-                vec3 d = vec3(0.0, 0.333, 0.667); 
-                return a + b * cos(6.28318 * (c * t + d));
-            }
+				return new THREE.CubeTexture(textures, THREE.CubeReflectionMapping);
+			}
 
-            vec3 heatmap(float value) {
-                value = clamp(value, 0.0, 1.0);
-                if (value < 0.3) return mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), value / 0.3);
-                if (value < 0.7) return mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 1.0, 0.0), (value - 0.3) / 0.4);
-                return mix(vec3(1.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), (value - 0.7) / 0.3);
-            }
+			function loadSkybox() {
+				const loader = new THREE.CubeTextureLoader();
 
-            vec3 apply_gradient(float data_val) {
-                float shifted = clamp(data_val * GRADIENT_CONTRAST + GRADIENT_BIAS, 0.0, 1.0);
-                if (GRADIENT_STOPS_COUNT <= 1) return GRADIENT_STOPS[0];
-                float idx_f = shifted * float(GRADIENT_STOPS_COUNT - 1);
-                int idx_l = int(floor(idx_f)); int idx_h = int(ceil(idx_f));
-                return mix(GRADIENT_STOPS[idx_l], GRADIENT_STOPS[idx_h], fract(idx_f));
-            }
-            
-            float fresnel(vec3 N, vec3 V, float IoR) {
-                float cosTheta = clamp(dot(N, V), 0.0, 1.0);
-                float R0 = pow((1.0 - IoR) / (1.0 + IoR), 2.0);
-                return R0 + (1.0 - R0) * pow(1.0 - cosTheta, 5.0);
-            }
+				const filePaths = [
+					"skybox.png",
+					"skybox.png",
+					"skybox.png",
+					"skybox.png",
+					"skybox.png",
+					"skybox.png",
+				];
 
-            vec4 calculateColor() {
-                float raw = 0.0;
-                
-                if (SHADING_MODE == 1) raw = abs(vWaveHeight) * 0.2; 
-                else if (SHADING_MODE == 2) raw = (vWaveVelocity * 2.0 / (1.0 + abs(vWaveVelocity * 2.0))) * 0.5 + 0.5;
-                else if (SHADING_MODE == 3) raw = vWaveHeight * vWaveHeight * 0.02; 
-                else raw = abs(vWaveHeight) * 0.2; 
+				loader.load(
+					filePaths,
+					(texture) => {
+						texture.mapping = THREE.CubeReflectionMapping;
+						cubeRenderTarget = texture;
+						scene.background = cubeRenderTarget;
+						scene.environment = cubeRenderTarget;
+						syncM();
+					},
+					undefined,
+					(err) => {
+						cubeRenderTarget = createBlackCubemap();
+						scene.background = new THREE.Color(0x000000);
+						scene.environment = cubeRenderTarget;
+						syncM();
+					},
+				);
+			}
 
-                float clipVal = (SHADING_MODE == 2) ? abs(raw - 0.5) * 2.0 : raw;
-                if (clipVal < VIS_MIN || (clipVal > VIS_MAX && clipVal <= 1.0)) return vec4(0.0);
+			const GLSL_COMMON_FUNCTIONS = `
+uniform vec3 SUN_DIR;
+uniform float LIGHT_INTENSITY;
+uniform float REFLECTIVITY; // NEW: Surface Reflectivity/Gloss
+uniform samplerCube tCube;
+uniform int SHADING_MODE;
+uniform float GRADIENT_BIAS;
+uniform float GRADIENT_CONTRAST;
+uniform vec3 GRADIENT_STOPS[8];
+uniform int GRADIENT_STOPS_COUNT;
+uniform float VIS_MIN;
+uniform float VIS_MAX;
+uniform float uOpacity;
+uniform float uShowDensity;
+uniform float uExposure;
 
-                vec3 col;
-                float energyEnvelope = 0.0;
-                
-                if (SHADING_MODE == 0) { 
-                    // Realistic Water Reflection Model
-                    
-                    vec3 N = normalize(vNormal);
-                    vec3 V = normalize(vViewDir);
-                    vec3 L = SUN_DIR; 
-                    
-                    vec3 baseColor = GRADIENT_STOPS[0];
-                    float IoR = 1.33; // Water
-                    
-                    // Diffuse Lighting (Lambertian)
-                    float NdotL = max(0.0, dot(N, L));
-                    // Base color (darkened blue/teal) for shallow/deep water appearance
-                    vec3 waterBase = baseColor * 0.5 + vec3(0.05, 0.15, 0.2); 
-                    vec3 diffuse = waterBase * (vec3(0.4) + NdotL * LIGHT_INTENSITY * 0.8);
+varying vec3 vNormal;
+varying vec3 vViewDir;
+varying float vWaveHeight;
+varying float vWaveVelocity;
+varying float vDensity;
 
-                    // Blinn-Phong Specular
-                    vec3 H = normalize(L + V);
-                    float NdotH = max(0.0, dot(N, H));
-                    float shininess = 150.0; // Sharper highlight for water
-                    float specular = pow(NdotH, shininess) * LIGHT_INTENSITY;
-                    vec3 specularColor = vec3(1.0); 
+vec3 spectral_phase(float t) {
+    vec3 a = vec3(0.5, 0.5, 0.5);
+    vec3 b = vec3(0.5, 0.5, 0.5);
+    vec3 c = vec3(1.0, 1.0, 1.0);
+    vec3 d = vec3(0.0, 0.333, 0.667);
+    return a + b * cos(6.28318 * (c * t + d));
+}
 
-                    // Fresnel Reflection (controls the blend between base and reflection)
-                    float F = fresnel(N, V, IoR);
-                    
-                    // Cube Map Reflection
-                    vec3 R = reflect(-V, N);
-                    vec3 reflection = textureCube(tCube, R).rgb;
-                    
-                    // Combine: Diffuse + Specular + Reflection (blended by Fresnel)
-                    // Fresnel controls reflection strength (strong at edges)
-                    vec3 baseLight = diffuse + specularColor * specular;
-                    col = mix(baseLight, reflection, F);
-                    
-                    // Add a slight dark tint for refraction/depth
-                    col *= (1.0 - F * 0.1); 
+vec3 heatmap(float value) {
+    value = clamp(value, 0.0, 1.0);
+    if (value < 0.3) return mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), value / 0.3);
+    if (value < 0.7) return mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 1.0, 0.0), (value - 0.3) / 0.4);
+    return mix(vec3(1.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), (value - 0.7) / 0.3);
+}
 
-                } 
-                else if (SHADING_MODE == 4) { 
-                    float v = clamp(vWaveHeight * 0.5, -1.0, 1.0);
-                    if (v < 0.0) col = mix(vec3(0.05), vec3(0.2, 0.5, 1.0), -v);
-                    else col = mix(vec3(0.05), vec3(1.0, 0.3, 0.2), v);
-                } 
-                else if (SHADING_MODE == 5) { 
-                    float h = vWaveHeight * 0.5; 
-                    float v = vWaveVelocity * 8.0; 
-                    float energy = sqrt(h*h + v*v);
-                    energyEnvelope = energy;
-                    float angle = atan(v, h); 
-                    float phase = angle / 6.28318 + 0.5; 
-                    vec3 spectralColor = spectral_phase(phase);
-                    float brightness = smoothstep(0.0, 1.0, sqrt(energy) * 1.5);
-                    col = spectralColor * brightness;
-                    col += vec3(smoothstep(1.0, 3.0, energy) * 0.5);
-                } 
-                else { 
-                    vec3 map = (SHADING_MODE == 3) ? heatmap(clamp(raw,0.,1.)) : apply_gradient(raw);
-                    float d = max(0.0, dot(vNormal, SUN_DIR));
-                    col = map * (vec3(0.4) + d * LIGHT_INTENSITY * 0.8);
-                }
-                
-                if (uShowDensity > 0.5 && vDensity > 0.01) {
-                    vec3 densityColor = vec3(0.6, 0.9, 1.0); 
-                    col = mix(col, densityColor, vDensity * 0.6); 
-                    col += densityColor * vDensity * 0.3;
-                }
+vec3 apply_gradient(float data_val) {
+    float shifted = clamp(data_val * GRADIENT_CONTRAST + GRADIENT_BIAS, 0.0, 1.0);
+    if (GRADIENT_STOPS_COUNT <= 1) return GRADIENT_STOPS[0];
+    float idx_f = shifted * float(GRADIENT_STOPS_COUNT - 1);
+    int idx_l = int(floor(idx_f)); int idx_h = int(ceil(idx_f));
+    return mix(GRADIENT_STOPS[idx_l], GRADIENT_STOPS[idx_h], fract(idx_f));
+}
 
-                float finalAlpha = uOpacity;
+float fresnel(vec3 N, vec3 V, float IoR) {
+    float cosTheta = clamp(dot(N, V), 0.0, 1.0);
+    float R0 = pow((1.0 - IoR) / (1.0 + IoR), 2.0);
+    return R0 + (1.0 - R0) * pow(1.0 - cosTheta, 5.0);
+}
 
-                // FIX: Ensure full opacity if uOpacity is set to max, overriding point modulation.
-                if (uOpacity >= 0.999) {
-                    finalAlpha = 1.0;
-                } else if (uIsPoints && uModulateAlpha) {
-                    float magnitude = 0.0;
-                    if (SHADING_MODE == 5) magnitude = energyEnvelope;
-                    else if (SHADING_MODE == 2) magnitude = abs(vWaveVelocity) * 4.0; 
-                    else magnitude = abs(vWaveHeight) * 0.5;
-                    
-                    float signalAlpha = smoothstep(0.005, 0.15, magnitude);
-                    
-                    if (uShowDensity > 0.5) {
-                        signalAlpha = max(signalAlpha, vDensity); 
-                    }
+vec4 calculateColor(bool isPoints, float pointFalloff, bool modulateAlpha) {
+    float raw = 0.0;
+    float energyEnvelope = 0.0;
+    
+    if (SHADING_MODE == 1) raw = abs(vWaveHeight) * 0.2; 
+    else if (SHADING_MODE == 2) raw = (vWaveVelocity * 2.0 / (1.0 + abs(vWaveVelocity * 2.0))) * 0.5 + 0.5;
+    else if (SHADING_MODE == 3) raw = vWaveHeight * vWaveHeight * 0.02; 
+    else raw = abs(vWaveHeight) * 0.2; 
 
-                    finalAlpha *= signalAlpha;
-                }
-                
-                return vec4(col, finalAlpha);
-            }
-        `;
-			const defaultFs =
-				GLSL_SHADE_FUNC +
-				`
-    uniform float uAlphaTest;
-		void main() {
-        vec4 c = calculateColor();
+    float clipVal = (SHADING_MODE == 2) ? abs(raw - 0.5) * 2.0 : raw;
+    if (clipVal < VIS_MIN || (clipVal > VIS_MAX && clipVal <= 1.0)) return vec4(0.0);
+
+    vec3 col;
+    
+    if (SHADING_MODE == 0) { 
+        vec3 N = normalize(vNormal);
+        vec3 V = normalize(vViewDir);
+        vec3 L = SUN_DIR; 
         
-        if (uIsPoints) {
-            vec2 coord = gl_PointCoord - vec2(0.5);
-            
-            float r = length(coord) * 2.0;
-            
-            if (r > 1.0) discard;
+        vec3 baseColor = GRADIENT_STOPS[0];
+        float IoR = 1.33;
+        
+        float NdotL = max(0.0, dot(N, L));
+        
+        // FIX: Remove hardcoded blue offset. The base color is now mainly derived from Gradient Stop 0.
+        vec3 waterBase = baseColor * 0.7 + vec3(0.0); 
+        vec3 diffuse = waterBase * (vec3(0.4) + NdotL * LIGHT_INTENSITY * 0.8);
 
-            float sharpness = 2.0 + (uPointFalloff * 10.0);
-            
-            float g = exp(- (r * r) * sharpness);
-            
-            c.a *= g;
+        vec3 H = normalize(L + V);
+        float NdotH = max(0.0, dot(N, H));
+        
+        // Use REFLECTIVITY to control shininess (gloss/roughness)
+        float shininess = 5.0 + REFLECTIVITY * 145.0; // 5.0 (rough) to 150.0 (glossy)
+        // Use REFLECTIVITY to scale specular highlight intensity
+        float specular = pow(NdotH, shininess) * LIGHT_INTENSITY * REFLECTIVITY; 
+        vec3 specularColor = vec3(1.0); 
+
+        float F = fresnel(N, V, IoR);
+        
+        vec3 R = reflect(-V, N);
+        // Use REFLECTIVITY to scale environment reflection intensity
+        vec3 reflection = textureCube(tCube, R).rgb * REFLECTIVITY;
+        
+        vec3 baseLight = diffuse + specularColor * specular;
+        col = mix(baseLight, reflection, F);
+				col = mix(col, reflection, REFLECTIVITY);
+        col *= (1.0 - F * 0.1); 
+
+    } 
+    else if (SHADING_MODE == 4) { 
+        float v = clamp(vWaveHeight * 0.5, -1.0, 1.0);
+        if (v < 0.0) col = mix(vec3(0.05), vec3(0.2, 0.5, 1.0), -v);
+        else col = mix(vec3(0.05), vec3(1.0, 0.3, 0.2), v);
+    } 
+    else if (SHADING_MODE == 5) { 
+        float h = vWaveHeight * 0.5; 
+        float v = vWaveVelocity * 8.0; 
+        energyEnvelope = sqrt(h*h + v*v);
+        float angle = atan(v, h); 
+        float phase = angle / 6.28318 + 0.5; 
+        vec3 spectralColor = spectral_phase(phase);
+        float brightness = smoothstep(0.0, 1.0, sqrt(energyEnvelope) * 1.5);
+        col = spectralColor * brightness;
+        col += vec3(smoothstep(1.0, 3.0, energyEnvelope) * 0.5);
+    } 
+    else { 
+        vec3 map = (SHADING_MODE == 3) ? heatmap(clamp(raw,0.,1.)) : apply_gradient(raw);
+        float d = max(0.0, dot(vNormal, SUN_DIR));
+        col = map * (vec3(0.4) + d * LIGHT_INTENSITY * 0.8);
+    }
+    
+    if (uShowDensity > 0.5 && vDensity > 0.01) {
+        vec3 densityColor = vec3(0.6, 0.9, 1.0); 
+        col = mix(col, densityColor, vDensity * 0.6); 
+        col += densityColor * vDensity * 0.3;
+    }
+
+    float finalAlpha = uOpacity;
+
+    if (modulateAlpha && isPoints && uOpacity < 0.999) {
+        float magnitude = 0.0;
+        if (SHADING_MODE == 5) magnitude = energyEnvelope;
+        else if (SHADING_MODE == 2) magnitude = abs(vWaveVelocity) * 4.0; 
+        else magnitude = abs(vWaveHeight) * 0.5;
+        
+        float signalAlpha = smoothstep(0.005, 0.15, magnitude);
+        
+        if (uShowDensity > 0.5) {
+            signalAlpha = max(signalAlpha, vDensity); 
         }
 
-       	if (c.a < uAlphaTest) discard;
-        
-        c.rgb *= uExposure;
-        
-        gl_FragColor = c;
+        finalAlpha *= signalAlpha;
     }
+    
+    col *= uExposure;
+    
+    return vec4(col, finalAlpha);
+}
+`;
+
+			const GLSL_MESH_VS = `
+uniform float uZScale;
+
+attribute float waveHeight;
+attribute float waveVelocity;
+attribute float aDensity; 
+
+varying vec3 vNormal;
+varying vec3 vViewDir;
+varying float vWaveHeight;
+varying float vWaveVelocity;
+varying float vDensity;
+
+void main() { 
+    vec3 newPosition = position;
+    newPosition.y += waveHeight * 2.0 * uZScale * 0.05; 
+    
+    vec4 worldPosition = modelMatrix * vec4(newPosition, 1.0);
+
+    vNormal = normalize(mat3(modelMatrix) * normal); 
+    vWaveHeight = waveHeight; 
+    vWaveVelocity = waveVelocity; 
+    vDensity = aDensity; 
+    
+    vViewDir = normalize(cameraPosition - worldPosition.xyz);
+
+    gl_Position = projectionMatrix * viewMatrix * worldPosition;
+}
+`;
+
+			const GLSL_MESH_FS = GLSL_COMMON_FUNCTIONS + `
+uniform float uAlphaTest;
+void main() {
+    vec4 c = calculateColor(false, 0.0, false);
+    if (c.a < uAlphaTest) discard;
+    gl_FragColor = c;
+}
+`;
+
+			const GLSL_POINTS_VS = `
+uniform float uPointSize; 
+uniform float uPointScaleFactor;
+uniform bool uIs3DPoints;
+
+attribute float waveHeight;
+attribute float waveVelocity;
+attribute float aDensity; 
+
+varying vec3 vNormal;
+varying vec3 vViewDir;
+varying float vWaveHeight;
+varying float vWaveVelocity;
+varying float vDensity;
+
+void main() { 
+    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+    
+    if (!uIs3DPoints) { 
+        worldPosition.y += waveHeight * 2.0 * 0.05; 
+    }
+
+    vNormal = normalize(mat3(modelMatrix) * normal); 
+    vWaveHeight = waveHeight; 
+    vWaveVelocity = waveVelocity; 
+    vDensity = aDensity; 
+    
+    vViewDir = normalize(cameraPosition - worldPosition.xyz);
+
+    vec4 mvPosition = viewMatrix * worldPosition;
+    gl_Position = projectionMatrix * mvPosition;
+    
+    float amp = smoothstep(0.0, 1.0, abs(waveHeight));
+    gl_PointSize = uPointSize * (1.0 + amp * uPointScaleFactor); 
+    gl_PointSize *= (300.0 / -mvPosition.z); 
+}
+`;
+
+			const GLSL_POINTS_FS = GLSL_COMMON_FUNCTIONS + `
+uniform float uAlphaTest;
+uniform float uPointFalloff;
+uniform bool uModulateAlpha;
+
+void main() {
+    vec4 c = calculateColor(true, uPointFalloff, uModulateAlpha);
+    
+    vec2 coord = gl_PointCoord - vec2(0.5);
+    float r = length(coord) * 2.0;
+    
+    if (r > 1.0) discard;
+    float sharpness = (uPointFalloff * 10.0);
+    float g = exp(-(r * r) * sharpness);
+    
+    c.a *= g;
+    
+    if (c.a < uAlphaTest) discard;
+    
+    gl_FragColor = c;
+}
 `;
 
 			var selectedEmitterId = null;
@@ -1696,8 +1863,6 @@
 				parseInt(hex.slice(3, 5), 16),
 				parseInt(hex.slice(5, 7), 16),
 			];
-			var clamp = (v) => Math.max(0, Math.min(1, v));
-
 			var uniformsArray = (colors) => {
 				var arr = [];
 				for (var c of colors) arr.push(c);
@@ -1712,15 +1877,27 @@
 				);
 			};
 
-			var gtw = (i, j, l) => {
+			function getLayerSpacing() {
 				const gridStep = 50.0 / (GRID > 1 ? GRID - 1 : 1);
+				return IS_3D_MODE ? gridStep : GAP * 0.1;
+			}
 
-				const verticalSpacing = IS_3D_MODE ? gridStep : GAP * 0.1;
+			function getWorldToGridScale() {
+				const layerSpacing = getLayerSpacing();
+				return {
+					x: (GRID - 1) / 50.0,
+					z: (GRID - 1) / 50.0,
+					y: 1.0 / layerSpacing,
+				};
+			}
 
-				const totalHeight = (layers.length - 1) * verticalSpacing;
+			var gtw = (i, j, l) => {
+				const layerSpacing = getLayerSpacing();
+
+				const totalHeight = (layers.length - 1) * layerSpacing;
 				const centerYOffset = IS_3D_MODE ? totalHeight / 2 : 0;
 
-				const yPos = centerYOffset - l * verticalSpacing;
+				const yPos = centerYOffset - l * layerSpacing;
 
 				return new THREE.Vector3(
 					(j / (GRID - 1)) * 50 - 25,
@@ -2377,91 +2554,114 @@
 					scene.add(stampPreviewMesh);
 				}
 			}
-			function updTr() {
-				const gridStep = 50.0 / (GRID > 1 ? GRID - 1 : 1);
 
-				const verticalSpacing = IS_3D_MODE ? gridStep : GAP * 0.1;
+			function getShadingModeIndex(shadingMode) {
+				return [
+					"SPECULAR",
+					"HEIGHT",
+					"VELOCITY",
+					"ENERGY",
+					"DIVERGENCE",
+					"VECTOR_RGB",
+				].indexOf(shadingMode);
+			}
 
-				const totalHeight = (layers.length - 1) * verticalSpacing;
-				const centerYOffset = IS_3D_MODE ? totalHeight / 2 : 0;
+			function createBaseUniforms(layer, vizCfg, volOpacity) {
+				const source = IS_3D_MODE ? vizCfg : layer;
+				const stops = IS_3D_MODE
+					? source.volGradientStops
+					: source.gradientStops;
 
-				updateVolumeBox();
+				var cols = [];
+				for (let j = 0; j < MAX_GRADIENT_STOPS; j++) {
+					let c = stops[Math.min(j, stops.length - 1)];
+					cols.push(new THREE.Color(c[0] / 255, c[1] / 255, c[2] / 255));
+				}
 
-				const volVis = BASE_LAYER_CFG;
+				return {
+					SUN_DIR: { value: sunDir },
+					LIGHT_INTENSITY: { value: lInt },
+					REFLECTIVITY: { value: REFLECTIVITY },
+					SHADING_MODE: {
+						value: getShadingModeIndex(
+							IS_3D_MODE ? source.volShadingMode : source.shadingMode,
+						),
+					},
+					GRADIENT_BIAS: {
+						value: IS_3D_MODE ? source.volGradientBias : source.gradientBias,
+					},
+					GRADIENT_CONTRAST: {
+						value: IS_3D_MODE
+							? source.volGradientContrast
+							: source.gradientContrast,
+					},
+					GRADIENT_STOPS: { value: uniformsArray(cols) },
+					GRADIENT_STOPS_COUNT: { value: stops.length },
+					VIS_MIN: { value: visMin },
+					VIS_MAX: { value: visMax },
+					uOpacity: { value: volOpacity },
+					uShowDensity: { value: SHOW_DENSITY ? 1.0 : 0.0 },
+					uExposure: { value: EXPOSURE },
+					tCube: { value: cubeRenderTarget || createBlackCubemap() },
+					uAlphaTest: { value: 0.0 },
+					uZScale: { value: ZSC },
+				};
+			}
 
-				meshes.forEach((m, i) => {
-					m.position.y = centerYOffset - i * verticalSpacing;
-
-					if (m.material.uniforms) {
-						const l = layers[i];
-						const sourceL = IS_3D_MODE ? volVis : l;
-						const stops = IS_3D_MODE
-							? sourceL.volGradientStops
-							: sourceL.gradientStops;
-
-						var cols = [];
-						for (let j = 0; j < MAX_GRADIENT_STOPS; j++) {
-							let c = stops[Math.min(j, stops.length - 1)];
-							cols.push(new THREE.Color(c[0] / 255, c[1] / 255, c[2] / 255));
-						}
-
-						m.material.uniforms.SHADING_MODE.value = [
-							"SPECULAR",
-							"HEIGHT",
-							"VELOCITY",
-							"ENERGY",
-							"DIVERGENCE",
-							"VECTOR_RGB",
-						].indexOf(
-							IS_3D_MODE ? sourceL.volShadingMode : sourceL.shadingMode,
-						);
-						m.material.uniforms.GRADIENT_STOPS.value = uniformsArray(cols);
-						m.material.uniforms.GRADIENT_STOPS_COUNT.value = stops.length;
-						m.material.uniforms.GRADIENT_BIAS.value = IS_3D_MODE
-							? sourceL.volGradientBias
-							: sourceL.gradientBias;
-						m.material.uniforms.GRADIENT_CONTRAST.value = IS_3D_MODE
-							? sourceL.volGradientContrast
-							: sourceL.gradientContrast;
-						m.material.uniforms.VIS_MIN.value = visMin;
-						m.material.uniforms.VIS_MAX.value = visMax;
-						m.material.uniforms.uPointSize.value = l.pointSize;
-						m.material.uniforms.uPointScaleFactor.value = l.pointScaleFactor;
-						m.material.uniforms.uPointFalloff.value = l.pointFalloff;
-					}
+			function createMeshMaterial(baseUniforms) {
+				return new THREE.ShaderMaterial({
+					uniforms: baseUniforms,
+					vertexShader: GLSL_MESH_VS,
+					fragmentShader: GLSL_MESH_FS,
+					transparent: true,
+					side: 2,
+					blending: THREE.NormalBlending,
+					depthWrite: true,
+					depthTest: true,
 				});
 			}
 
-			function setupDragPlane(emitterMesh, hitPoint) {
-				if (!emitterMesh) return;
+			function createPointsMaterial(baseUniforms, layer) {
+				const uforms = {
+					...baseUniforms,
+					uPointSize: { value: layer.pointSize },
+					uPointScaleFactor: { value: layer.pointScaleFactor },
+					uPointFalloff: { value: layer.pointFalloff },
+					uModulateAlpha: { value: IS_ALPHA_MODULATION },
+					uIs3DPoints: { value: IS_3D_MODE && layer.visMode === "POINTS" },
+				};
 
-				const cameraRay = camera.position.clone().sub(TGT).normalize();
-				dragPlane.setFromNormalAndCoplanarPoint(
-					cameraRay,
-					emitterMesh.position,
-				);
-
-				dragStartOffset.copy(hitPoint).sub(emitterMesh.position);
-
-				const planeGeometry = new THREE.PlaneGeometry(100, 100);
-				const planeMaterial = new THREE.MeshBasicMaterial({
-					color: 0x68b2f0,
+				return new THREE.ShaderMaterial({
+					uniforms: uforms,
+					vertexShader: GLSL_POINTS_VS,
+					fragmentShader: GLSL_POINTS_FS,
 					transparent: true,
-					opacity: 0.15,
-					side: THREE.DoubleSide,
+					side: 2,
+					blending:
+						baseUniforms.uOpacity.value >= 1.0
+							? THREE.NormalBlending
+							: THREE.AdditiveBlending,
+					depthWrite: false,
+					depthTest: true,
 				});
+			}
+
+			function updTr() {
+				const layerSpacing = getLayerSpacing();
+				const totalHeight = (layers.length - 1) * layerSpacing;
+				const centerYOffset = IS_3D_MODE ? totalHeight / 2 : 0;
+				updateVolumeBox();
+				syncE();
 			}
 
 			function syncM() {
+				const layerSpacing = getLayerSpacing()
+				const totalHeight = (layers.length - 1) * layerSpacing;
+				const centerYOffset = IS_3D_MODE ? totalHeight / 2 : 0;
 				meshes.forEach(disposeMesh);
 				meshes = [];
 				var volOpacity = parseFloat($("i-vo").value);
 				const vizCfg = BASE_LAYER_CFG;
-				
-				// Conditional settings for full opacity vs. additive transparency
-				var isAdditive = volOpacity < 1.0; 
-				var depthWriteVal = volOpacity >= 1.0; // Opaque surfaces must write depth
-				var alphaTestVal = volOpacity >= 1.0 ? 0.0 : 0.01; 
 
 				updateVolumeBox();
 
@@ -2484,102 +2684,22 @@
 						new THREE.BufferAttribute(new Float32Array(count), 1),
 					);
 
-					const source = IS_3D_MODE ? vizCfg : l;
-					const stops = IS_3D_MODE
-						? source.volGradientStops
-						: source.gradientStops;
-					var cols = [];
-					for (let j = 0; j < MAX_GRADIENT_STOPS; j++) {
-						let c = stops[Math.min(j, stops.length - 1)];
-						cols.push(new THREE.Color(c[0] / 255, c[1] / 255, c[2] / 255));
-					}
-					var uforms = {
-						SUN_DIR: { value: sunDir },
-						LIGHT_INTENSITY: { value: lInt },
-						TIME: { value: 0 },
-						SHADING_MODE: {
-							value: [
-								"SPECULAR",
-								"HEIGHT",
-								"VELOCITY",
-								"ENERGY",
-								"DIVERGENCE",
-								"VECTOR_RGB",
-							].indexOf(
-								IS_3D_MODE ? source.volShadingMode : source.shadingMode,
-							),
-						},
-						GRADIENT_BIAS: {
-							value: IS_3D_MODE ? source.volGradientBias : source.gradientBias,
-						},
-						GRADIENT_CONTRAST: {
-							value: IS_3D_MODE
-								? source.volGradientContrast
-								: source.gradientContrast,
-						},
-						GRADIENT_STOPS: { value: uniformsArray(cols) },
-						GRADIENT_STOPS_COUNT: { value: stops.length },
-						VIS_MIN: { value: visMin },
-						VIS_MAX: { value: visMax },
-						uIsPoints: { value: l.visMode === "POINTS" },
-						uPointSize: { value: l.pointSize },
-						uIs3D: { value: IS_3D_MODE },
-						uPointScaleFactor: { value: l.pointScaleFactor },
-						uPointFalloff: { value: l.pointFalloff },
-						uOpacity: { value: volOpacity },
-						uModulateAlpha: { value: IS_ALPHA_MODULATION },
-						uIs3DPoints: { value: IS_3D_MODE && l.visMode === "POINTS" },
-						uAlphaTest: { value: alphaTestVal },
-						uShowDensity: { value: SHOW_DENSITY ? 1.0 : 0.0 },
-						uExposure: { value: EXPOSURE },
-                        tCube: { value: cubeRenderTarget || createBlackCubemap() }
-					};
+					const baseUniforms = createBaseUniforms(l, vizCfg, volOpacity);
+					const usePoints = l.visMode === "POINTS" || IS_3D_MODE;
 
-					var m = new THREE.ShaderMaterial({
-						uniforms: uforms,
-						vertexShader: `
-                varying vec3 vNormal; attribute float waveHeight; attribute float waveVelocity; attribute float aDensity; 
-                varying float vWaveHeight; varying float vWaveVelocity; varying float vDensity; 
-                varying vec3 vViewDir; 
+					let material, mesh;
 
-                uniform bool uIsPoints; uniform float uPointSize; uniform bool uIs3D; uniform float uPointScaleFactor;
-                uniform bool uIs3DPoints;
-                void main(){ 
-                    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-                    if (!uIs3DPoints) { 
-                        worldPosition.y += waveHeight * 2.0 * ${ZSC * 0.05}; 
-                    }
-
-                    vNormal=normalize(mat3(modelMatrix)*normal); 
-                    vWaveHeight=waveHeight; vWaveVelocity=waveVelocity; vDensity=aDensity; 
-                    
-                    vViewDir = normalize(cameraPosition - worldPosition.xyz);
-
-                    vec4 mvPosition = viewMatrix * worldPosition;
-                    gl_Position=projectionMatrix*mvPosition;
-                    
-                    if (uIsPoints) {
-                        float amp = smoothstep(0.0, 1.0, abs(waveHeight));
-                        gl_PointSize = uPointSize * (1.0 + amp * uPointScaleFactor); 
-                        gl_PointSize *= (300.0 / -mvPosition.z); 
-                    }
-                }`,
-						fragmentShader: defaultFs,
-						transparent: true,
-						side: 2,
-						blending: volOpacity >= 1.0 ? THREE.NormalBlending : THREE.AdditiveBlending,
-						depthWrite: depthWriteVal,
-						depthTest: true,
-					});
-
-					let mesh;
-					if (l.visMode === "MESH" && !IS_3D_MODE) {
-						mesh = new THREE.Mesh(g, m);
+					if (usePoints) {
+						material = createPointsMaterial(baseUniforms, l);
+						mesh = new THREE.Points(g, material);
 					} else {
-						mesh = new THREE.Points(g, m);
+						material = createMeshMaterial(baseUniforms);
+						mesh = new THREE.Mesh(g, material);
 					}
+
+					mesh.position.y = centerYOffset - i * layerSpacing;
 					mesh.userData = { lid: l.id, idx: i, visMode: l.visMode };
-                    mesh.renderOrder = i;
+					mesh.renderOrder = i;
 					scene.add(mesh);
 					meshes.push(mesh);
 				});
@@ -2686,6 +2806,82 @@
 				});
 			}
 
+			function parseCustomFormula(formula) {
+				const fnStr = `
+                    try {
+                        with (this.vars) {
+                            return ${formula};
+                        }
+                    } catch (e) {
+                        return this.vars.U_CURR; // Fallback to avoid simulation crash
+                    }
+                `;
+				return new Function("vars", fnStr);
+			}
+
+			function updateCustomFormula() {
+				const name = $("custom-name").value;
+				const vars = $("custom-vars").value;
+				const code = $("custom-code").value;
+
+				GLOBAL_CUSTOM_FORMULA = { name, variables: vars, code };
+				FORMULA_ERROR = null;
+
+				// Check if code is empty (which causes the "undefined value" error on test)
+				if (!code.trim()) {
+					FORMULA_ERROR = "Formula code cannot be empty.";
+					COMPILED_CUSTOM_FUNCTION = null;
+					$("err").innerText = `Model Error: ${FORMULA_ERROR}`;
+					return false;
+				}
+
+				try {
+					const variableMap = {};
+					vars.split(";").forEach((pair) => {
+						const parts = pair.split("=");
+						if (parts.length === 2) {
+							const key = parts[0].trim();
+							const val = parseFloat(parts[1].trim());
+							// Only add if key is valid and value is a number (or parses to one)
+							if (key && !isNaN(val)) variableMap[key] = val;
+						}
+					});
+
+					const compiledFn = parseCustomFormula(code);
+					const testScope = {
+						U_CURR: 1.0,
+						U_PREV: 1.0,
+						LAP: 0.1,
+						DT_FACTOR: 1.0,
+						C_final: 0.25,
+						D_final: 0.005,
+						COUPLING_TERM: 0.01,
+						EXT_COUPLING: 0.01,
+						// Math functions available in scope
+						Math: Math, 
+						...variableMap,
+					};
+
+					const testResult = compiledFn.call({ vars: testScope });
+
+					if (isNaN(testResult) || testResult === undefined) {
+						throw new Error("Formula returned non-numeric or undefined value.");
+					}
+
+					COMPILED_CUSTOM_FUNCTION = compiledFn;
+					$("err").innerText = `Custom Model ready: ${name}`;
+					return true;
+				} catch (e) {
+					FORMULA_ERROR = e.message;
+					COMPILED_CUSTOM_FUNCTION = null;
+					$("err").innerText = `Model Error: ${FORMULA_ERROR.substring(
+						0,
+						80,
+					)}...`;
+					return false;
+				}
+			}
+
 			function sim() {
 				if (!layers.length) return;
 				var N = GRID;
@@ -2694,24 +2890,14 @@
 				var DT2 = DT_FACTOR * DT_FACTOR;
 				var max_wave_abs = 0.0;
 
-				const maxC = IS_3D_MODE ? BASE_LAYER_CFG.C : layers.reduce((max, l) => Math.max(max, l.C), 0.0);
-				const dx = 50.0 / (GRID - 1);
-				const maxDtStable = dx / maxC;
-				const safetyLimit = maxDtStable * 0.9;
-				
-				if (DT_FACTOR > safetyLimit) {
-					console.warn("CFL condition violated or approaching instability. Simulation halted.");
-					IS_PAUSED = true;
-					return;
-				}
-
 				emits.forEach((e) => {
 					var phase = (TIME + e.off) * ((2 * Math.PI) / e.rt);
 					var val = 0;
 					if (e.shp === "STATIC") val = e.st;
 					else if (e.shp === "SINE") val = e.st * Math.sin(phase);
 					else if (e.shp === "COSINE") val = e.st * Math.cos(phase);
-					else if (e.shp === "SQUARE") val = e.st * Math.sign(Math.sin(phase));
+					else if (e.shp === "SQUARE")
+						val = e.st * Math.sign(Math.sin(phase));
 					else if (e.shp === "SAW")
 						val = e.st * (2 * (((TIME + e.off) / e.rt) % 1) - 1);
 					else if (e.shp === "NOISE") val = e.st * (Math.random() * 2 - 1);
@@ -2755,7 +2941,12 @@
 					volK = BASE_LAYER_CFG.K;
 				}
 
-				const layerCouplingContributions = new Array(layers.length).fill(null);
+				const layerCouplingContributions = new Array(layers.length)
+					.fill(null)
+					.map(() => new Float32Array(GRID * GRID));
+				layerDensityModulations = new Array(layers.length)
+					.fill(null)
+					.map(() => new Float32Array(GRID * GRID));
 
 				if (!IS_3D_MODE && GLOBAL_COUPLING_LINKS.length > 0) {
 					GLOBAL_COUPLING_LINKS.forEach((link) => {
@@ -2764,24 +2955,39 @@
 							link.targetIdx < layers.length &&
 							link.sourceIdx !== link.targetIdx
 						) {
-							if (!layerCouplingContributions[link.targetIdx])
-								layerCouplingContributions[link.targetIdx] = new Float32Array(
-									GRID * GRID,
-								);
-
 							const sourceU = u[link.sourceIdx];
-							const sourcePrev = u_prev[link.sourceIdx];
 							const targetU = u[link.targetIdx];
+							const sourcePrev = u_prev[link.sourceIdx];
 							const rate = link.rate;
 							const targetProp = link.targetProperty;
-							const accum = layerCouplingContributions[link.targetIdx];
+							const type = link.type;
 
 							for (let ptr = 0; ptr < N * N; ptr++) {
-								let sourceValue = 0;
-								if (targetProp === "AMPLITUDE") sourceValue = sourceU[ptr];
-								else if (targetProp === "VELOCITY")
-									sourceValue = sourceU[ptr] - sourcePrev[ptr];
-								accum[ptr] += rate * (sourceValue - targetU[ptr]);
+								if (type === "ENERGY_EXCHANGE") {
+									const diff = sourceU[ptr] - targetU[ptr];
+
+									layerCouplingContributions[link.targetIdx][ptr] +=
+										rate * diff;
+									layerCouplingContributions[link.sourceIdx][ptr] -=
+										rate * diff;
+								} else if (type === "MODULATE_DENSITY") {
+									let sourceAmp = Math.abs(sourceU[ptr]);
+
+									let densityModulation = Math.max(
+										0,
+										Math.min(rate * sourceAmp, 1.0),
+									);
+
+									layerDensityModulations[link.targetIdx][ptr] +=
+										densityModulation;
+								} else {
+									let sourceValue = 0;
+									if (targetProp === "AMPLITUDE") sourceValue = sourceU[ptr];
+									else if (targetProp === "VELOCITY")
+										sourceValue = sourceU[ptr] - sourcePrev[ptr];
+									layerCouplingContributions[link.targetIdx][ptr] +=
+										rate * (sourceValue - targetU[ptr]);
+								}
 							}
 						}
 					});
@@ -2800,7 +3006,22 @@
 					var finalD = IS_3D_MODE ? BASE_LAYER_CFG.D : l.D;
 					var effBnd = IS_3D_MODE ? l.bnd : l.bnd;
 
-					var couplingArr = layerCouplingContributions[idx];
+					var externalCouplingArr = layerCouplingContributions[idx];
+					var densityModulationArr = layerDensityModulations[idx];
+
+					var formulaFn =
+						l.formulaKey === "CUSTOM" && COMPILED_CUSTOM_FUNCTION
+							? COMPILED_CUSTOM_FUNCTION
+							: null;
+					var customVars = {};
+					if (formulaFn) {
+						GLOBAL_CUSTOM_FORMULA.variables.split(";").forEach((pair) => {
+							const parts = pair.split("=");
+							if (parts.length === 2) {
+								customVars[parts[0].trim()] = parseFloat(parts[1].trim());
+							}
+						});
+					}
 
 					for (let i = 1; i < N - 1; i++) {
 						var offset = i * N;
@@ -2809,8 +3030,11 @@
 							var ptr = offset + j;
 
 							var localDensity = den_arr[ptr];
+							var densityModulation = densityModulationArr[ptr];
 
-							if (localDensity > 0.99) {
+							var effectiveDensity = Math.min(1.0, localDensity + densityModulation);
+
+							if (effectiveDensity > 0.99) {
 								u_next_arr[ptr] = u_current_arr[ptr];
 								continue;
 							}
@@ -2830,7 +3054,7 @@
 							var U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
 
 							var C_density =
-								localDensity > 0 ? finalC * (1 - localDensity) : finalC;
+								effectiveDensity > 0 ? finalC * (1 - effectiveDensity) : finalC;
 
 							var C_final = C_density;
 							if (globalDensity > 0) {
@@ -2854,11 +3078,25 @@
 									K_BELOW * (U_BELOW - U_CURR) + K_CURR * (U_ABOVE - U_CURR);
 							}
 
-							var EXTERNAL_COUPLING_TERM = couplingArr ? couplingArr[ptr] : 0;
+							var EXTERNAL_COUPLING_TERM = externalCouplingArr[ptr];
 
 							var val;
 
-							if (l.formulaKey === "WAVE") {
+							if (formulaFn) {
+								const scope = {
+									U_CURR: U_CURR,
+									U_PREV: U_PREV,
+									LAP: lap,
+									DT_FACTOR: DT_FACTOR,
+									C_final: C_final,
+									D_final: D_final,
+									COUPLING_TERM: COUPLING_TERM * DT_FACTOR,
+									EXT_COUPLING: EXTERNAL_COUPLING_TERM * DT_FACTOR,
+									Math: Math,
+									...customVars,
+								};
+								val = formulaFn.call({ vars: scope });
+							} else if (l.formulaKey === "WAVE") {
 								val =
 									2 * U_CURR -
 									U_PREV +
@@ -2973,23 +3211,20 @@
 				}
 
 				if (AUTO_EXPOSURE) {
-					
 					const maxWaveValue = Math.max(0.01, MAX_WAVE_ABS);
-					
 					const DisplayReferenceMax = 0.5;
-					
-					const maxVisualIntensity = maxWaveValue * 0.2 * BASE_POINT_SETTINGS.pointScaleFactor;
-					
+					const maxVisualIntensity =
+						maxWaveValue * 0.2 * BASE_POINT_SETTINGS.pointScaleFactor;
 					let targetExposure = DisplayReferenceMax / maxVisualIntensity;
 
-					targetExposure = Math.max(0.01, Math.min(1.5, targetExposure)); 
-					
+					targetExposure = Math.max(0.01, Math.min(1.5, targetExposure));
+
 					EXPOSURE = lerp(EXPOSURE, targetExposure, 0.05);
 
 					$("i-exposure").value = EXPOSURE;
 					$("l-exposure").innerText = EXPOSURE.toFixed(2);
 				}
-				
+
 				if (
 					isContinuousBrushActive &&
 					(brush === "DISTURBANCE" || brush === "DENSITY_PAINT")
@@ -3012,17 +3247,18 @@
 					}
 					m.visible = true;
 
+					const isMeshVis = !IS_3D_MODE && m.userData.visMode === "MESH";
+
 					var pos = m.geometry.attributes.position.array;
 					var hAttr = m.geometry.attributes.waveHeight.array;
 					var vAttr = m.geometry.attributes.waveVelocity.array;
 					var dAttr = m.geometry.attributes.aDensity.array;
 
-					const isMeshVis = l.visMode === "MESH" && !IS_3D_MODE;
-
 					for (let k = 0; k < GRID * GRID; k++) {
 						hAttr[k] = u[i][k];
 						vAttr[k] = u[i][k] - u_prev[i][k];
-						dAttr[k] = den[i][k];
+						let combinedDensity = den[i][k] + layerDensityModulations[i][k];
+						dAttr[k] = Math.min(1.0, combinedDensity);
 
 						if (isMeshVis) {
 							pos[k * 3 + 1] = u[i][k] * ZSC * 0.1;
@@ -3035,15 +3271,24 @@
 
 					if (isMeshVis) m.geometry.computeVertexNormals();
 					if (m.material.uniforms) {
-						m.material.uniforms.TIME.value = TIME / 60;
 						m.material.uniforms.SUN_DIR.value = sunDir;
 						m.material.uniforms.LIGHT_INTENSITY.value = lInt;
+						m.material.uniforms.REFLECTIVITY.value = REFLECTIVITY;
 						m.material.uniforms.VIS_MIN.value = visMin;
 						m.material.uniforms.VIS_MAX.value = visMax;
-						m.material.uniforms.uPointSize.value = l.pointSize;
-						m.material.uniforms.uPointScaleFactor.value = l.pointScaleFactor;
-						m.material.uniforms.uPointFalloff.value = l.pointFalloff;
 						m.material.uniforms.uExposure.value = EXPOSURE;
+						if (m.material.uniforms.uZScale) {
+							m.material.uniforms.uZScale.value = ZSC;
+						}
+						if (m.material.uniforms.uPointSize) {
+							m.material.uniforms.uPointSize.value = l.pointSize;
+						}
+						if (m.material.uniforms.uPointScaleFactor) {
+							m.material.uniforms.uPointScaleFactor.value = l.pointScaleFactor;
+						}
+						if (m.material.uniforms.uPointFalloff) {
+							m.material.uniforms.uPointFalloff.value = l.pointFalloff;
+						}
 					}
 				});
 				updCam();
@@ -3143,8 +3388,8 @@
 					: L_CENTER + 1;
 
 				const DX = 50.0 / (GRID - 1);
-				const DZ_LAYER = GAP * 0.1;
-				const Z_SCALE_FACTOR = DX > 0 ? DZ_LAYER / DX : 1.0;
+				const layerSpacing = getLayerSpacing();
+				const Z_SCALE_FACTOR = DX > 0 ? layerSpacing / DX : 1.0;
 
 				const maxDistSq = mRad * mRad;
 				const isGlobalDensityBrush = brush === "DENSITY_PAINT" && l === -1;
@@ -3336,6 +3581,7 @@
 						DT_FACTOR,
 						VISCOSITY,
 						lInt,
+						REFLECTIVITY,
 						visMin,
 						visMax,
 						IS_3D_MODE,
@@ -3375,6 +3621,7 @@
 					camera: { rad, theta, phi },
 					globalDen: Array.from(GLOBAL_DEN),
 					globalCoupling: GLOBAL_COUPLING_LINKS,
+					customFormula: GLOBAL_CUSTOM_FORMULA,
 				};
 			}
 
@@ -3393,6 +3640,8 @@
 				$("i-vis").value = VISCOSITY;
 				lInt = cfg.global.lInt || DEFAULT_STATE_CONFIG.global.lInt;
 				$("i-li").value = lInt;
+				REFLECTIVITY = cfg.global.REFLECTIVITY || DEFAULT_STATE_CONFIG.global.REFLECTIVITY;
+				$("i-refl").value = REFLECTIVITY;
 				visMin = cfg.global.visMin || DEFAULT_STATE_CONFIG.global.visMin;
 				$("i-vis-min").value = visMin;
 				visMax = cfg.global.visMax || DEFAULT_STATE_CONFIG.global.visMax;
@@ -3408,7 +3657,8 @@
 
 				EXPOSURE = cfg.global.EXPOSURE || DEFAULT_STATE_CONFIG.global.EXPOSURE;
 				$("i-exposure").value = EXPOSURE;
-				AUTO_EXPOSURE = cfg.global.AUTO_EXPOSURE || DEFAULT_STATE_CONFIG.global.AUTO_EXPOSURE;
+				AUTO_EXPOSURE =
+					cfg.global.AUTO_EXPOSURE || DEFAULT_STATE_CONFIG.global.AUTO_EXPOSURE;
 				$("cb-auto-exposure").checked = AUTO_EXPOSURE;
 
 				$("i-sp").value =
@@ -3442,18 +3692,18 @@
 							: cfg.global.VOL_LAYERS || DEFAULT_STATE_CONFIG.global.VOL_LAYERS,
 				};
 
+				if (cfg.customFormula) {
+					GLOBAL_CUSTOM_FORMULA = cfg.customFormula;
+					$("custom-name").value = GLOBAL_CUSTOM_FORMULA.name;
+					$("custom-vars").value = GLOBAL_CUSTOM_FORMULA.variables;
+					$("custom-code").value = GLOBAL_CUSTOM_FORMULA.code;
+					updateCustomFormula();
+				}
+
 				fullResetConfig(tempConfig);
 				updateSimControls();
 
 				$("i-vo").oninput();
-			}
-
-			function handlePresetLoad(presetName) {
-				if (presetName && PRESETS[presetName]) {
-					const config = JSON.parse(JSON.stringify(PRESETS[presetName]));
-					setAppState(config);
-					clearSimulation();
-				}
 			}
 
 			function savePresetFile() {
@@ -3500,6 +3750,54 @@
 				input.click();
 			}
 
+			function saveFormulaFile() {
+				try {
+					const formula = GLOBAL_CUSTOM_FORMULA;
+					const json = JSON.stringify(formula, null, 2);
+					const blob = new Blob([json], { type: "text/plain" });
+					const a = document.createElement("a");
+					a.href = URL.createObjectURL(blob);
+					a.download = `formula_${formula.name.replace(/\s/g, "_")}.json`;
+					document.body.appendChild(a);
+					a.click();
+					document.body.removeChild(a);
+					$("err").innerText = `Formula '${formula.name}' saved successfully!`;
+				} catch (e) {
+					$("err").innerText = "Error saving formula: " + e.message;
+				}
+			}
+
+			function loadFormulaFile() {
+				const input = document.createElement("input");
+				input.type = "file";
+				input.accept = ".json,.txt";
+				input.onchange = (e) => {
+					const file = e.target.files[0];
+					if (!file) return;
+					const reader = new FileReader();
+					reader.onload = function (event) {
+						try {
+							const content = event.target.result;
+							const formula = JSON.parse(content);
+							if (formula.name && formula.code) {
+								GLOBAL_CUSTOM_FORMULA = formula;
+								$("custom-name").value = formula.name;
+								$("custom-vars").value = formula.variables || "";
+								$("custom-code").value = formula.code;
+								updateCustomFormula();
+								$("err").innerText = `Formula '${formula.name}' loaded successfully!`;
+							} else {
+								throw new Error("Invalid formula file structure.");
+							}
+						} catch (err) {
+							$("err").innerText = "Error loading formula: " + err.message;
+						}
+					};
+					reader.readAsText(file);
+				};
+				input.click();
+			}
+
 			function fullResetConfig(config) {
 				TIME = 0;
 				layerCounter = 0;
@@ -3522,6 +3820,8 @@
 				$("i-vis").value = VISCOSITY;
 				lInt = cfg.global.lInt || DEFAULT_STATE_CONFIG.global.lInt;
 				$("i-li").value = lInt;
+				REFLECTIVITY = cfg.global.REFLECTIVITY || DEFAULT_STATE_CONFIG.global.REFLECTIVITY;
+				$("i-refl").value = REFLECTIVITY;
 				visMin = cfg.global.visMin || DEFAULT_STATE_CONFIG.global.visMin;
 				$("i-vis-min").value = visMin;
 				visMax = cfg.global.visMax || DEFAULT_STATE_CONFIG.global.visMax;
@@ -3537,7 +3837,8 @@
 
 				EXPOSURE = cfg.global.EXPOSURE || DEFAULT_STATE_CONFIG.global.EXPOSURE;
 				$("i-exposure").value = EXPOSURE;
-				AUTO_EXPOSURE = cfg.global.AUTO_EXPOSURE || DEFAULT_STATE_CONFIG.global.AUTO_EXPOSURE;
+				AUTO_EXPOSURE =
+					cfg.global.AUTO_EXPOSURE || DEFAULT_STATE_CONFIG.global.AUTO_EXPOSURE;
 				$("cb-auto-exposure").checked = AUTO_EXPOSURE;
 
 				$("i-sp").value =
@@ -3623,6 +3924,12 @@
 
 				GLOBAL_COUPLING_LINKS = cfg.globalCoupling || [];
 
+				GLOBAL_COUPLING_LINKS = GLOBAL_COUPLING_LINKS.map((link) => ({
+					...link,
+					type: link.type || "APPLY_FORCE",
+					targetProperty: link.targetProperty || "AMPLITUDE",
+				}));
+
 				updateSimControls();
 
 				if (cfg.initialDensity) {
@@ -3658,6 +3965,7 @@
 				u_prev = layers.map(() => new Float32Array(GRID * GRID));
 				u_aux = layers.map(() => new Float32Array(GRID * GRID));
 				den = layers.map(() => new Float32Array(GRID * GRID));
+				layerDensityModulations = layers.map(() => new Float32Array(GRID * GRID));
 
 				if (GLOBAL_DEN.length !== GRID * GRID) {
 					GLOBAL_DEN = new Float32Array(GRID * GRID);
@@ -3739,8 +4047,14 @@
 					var colorInputId = `vol_color_stop_${index}`;
 					var b = document.createElement("div");
 					b.className = "color-picker-row";
-					b.innerHTML = `<label>Stop ${index}</label><input type="color" id="${colorInputId}" value="${toHex(stop)}" oninput="var c=this.value; BASE_LAYER_CFG.volGradientStops[${index}]=hexToRgb(c); updTr(); syncM();">
-                    ${stops.length > 1 ? `<button onclick="window.volRemoveStop(${index})">-</button>` : ""}`;
+					b.innerHTML = `<label>Stop ${index}</label><input type="color" id="${colorInputId}" value="${toHex(
+						stop,
+					)}" oninput="var c=this.value; BASE_LAYER_CFG.volGradientStops[${index}]=hexToRgb(c); syncM();">
+                    ${
+											stops.length > 1
+												? `<button onclick="window.volRemoveStop(${index})">-</button>`
+												: ""
+										}`;
 					d.appendChild(b);
 				});
 
@@ -3792,27 +4106,57 @@
 				let content = "";
 
 				if (brush !== "EMITTER_PLACE" && brush !== "SDF_PLACE") {
-					content += `<label>Brush Radius: <span id="l-rad" class="value-label">${mRad}</span></label><input type="range" id="i-rad" min="1" max="50" value="${mRad}"><label>Brush Hardness (Falloff Edge): <span id="l-hnd" class="value-label">${brushHnd.toFixed(1)}</span></label><input type="range" id="i-hnd" min="0.0" max="1.0" value="${brushHnd}" step="0.1">`;
+					content += `<label>Brush Radius: <span id="l-rad" class="value-label">${mRad}</span></label><input type="range" id="i-rad" min="1" max="50" value="${mRad}"><label>Brush Hardness (Falloff Edge): <span id="l-hnd" class="value-label">${brushHnd.toFixed(
+						1,
+					)}</span></label><input type="range" id="i-hnd" min="0.0" max="1.0" value="${brushHnd}" step="0.1">`;
 				}
 
 				if (brush === "DISTURBANCE") {
-					const impulseControls = `<h4 style="margin-top: 10px;">Impulse Behavior</h4><label>Impulse Magnitude: <span id="l-mag" class="value-label">${IMPULSE_MAGNITUDE.toFixed(1)}</span></label><input type="range" id="i-mag" min="0.1" max="15.0" value="${IMPULSE_MAGNITUDE}" step="0.1"><label>Wavelength / Duration: <span id="l-wave-len" class="value-label">${IMPULSE_WAVELENGTH}</span></label><input type="range" id="i-wave-len" min="10" max="200" value="${IMPULSE_WAVELENGTH}"><div class="row"><label>Type</label><select id="i-type" style="width:100%;"><option value="PULSE" ${!IS_IMPULSE_HOLD ? "selected" : ""}>Pulse (Transient)</option><option value="HOLD" ${IS_IMPULSE_HOLD ? "selected" : ""}>Hold (Continuous)</option></select></div><div class="row" style="margin-top: 4px;"><label>Waveform</label><select id="i-wave-shape" style="width:100%;"><option value="CONSTANT" ${IMPULSE_WAVE_TYPE === "CONSTANT" ? "selected" : ""}>Constant Pulse</option><option value="SINE" ${IMPULSE_WAVE_TYPE === "SINE" ? "selected" : ""}>Sine Pulse</option><option value="SQUARE" ${IMPULSE_WAVE_TYPE === "SQUARE" ? "selected" : ""}>Square Pulse</option><option value="SAW" ${IMPULSE_WAVE_TYPE === "SAW" ? "selected" : ""}>Sawtooth Pulse</option></select></div><div class="row" style="margin-top: 4px;"><label>Shape</label><select id="i-shape" style="width:100%;"><option value="GAUSSIAN" ${IMPULSE_SHAPE === "GAUSSIAN" ? "selected" : ""}>Gaussian (Soft)</option><option value="SQUARE" ${IMPULSE_SHAPE === "SQUARE" ? "selected" : ""}>Square (Hard Edge)</option></select></div>`;
+					const impulseControls = `<h4 style="margin-top: 10px;">Impulse Behavior</h4><label>Impulse Magnitude: <span id="l-mag" class="value-label">${IMPULSE_MAGNITUDE.toFixed(
+						1,
+					)}</span></label><input type="range" id="i-mag" min="0.1" max="15.0" value="${IMPULSE_MAGNITUDE}" step="0.1"><label>Wavelength / Duration: <span id="l-wave-len" class="value-label">${IMPULSE_WAVELENGTH}</span></label><input type="range" id="i-wave-len" min="10" max="200" value="${IMPULSE_WAVELENGTH}"><div class="row"><label>Type</label><select id="i-type" style="width:100%;"><option value="PULSE" ${
+						!IS_IMPULSE_HOLD ? "selected" : ""
+					}>Pulse (Transient)</option><option value="HOLD" ${
+						IS_IMPULSE_HOLD ? "selected" : ""
+					}>Hold (Continuous)</option></select></div><div class="row" style="margin-top: 4px;"><label>Waveform</label><select id="i-wave-shape" style="width:100%;"><option value="CONSTANT" ${
+						IMPULSE_WAVE_TYPE === "CONSTANT" ? "selected" : ""
+					}>Constant Pulse</option><option value="SINE" ${
+						IMPULSE_WAVE_TYPE === "SINE" ? "selected" : ""
+					}>Sine Pulse</option><option value="SQUARE" ${
+						IMPULSE_WAVE_TYPE === "SQUARE" ? "selected" : ""
+					}>Square Pulse</option><option value="SAW" ${
+						IMPULSE_WAVE_TYPE === "SAW" ? "selected" : ""
+					}>Sawtooth Pulse</option></select></div><div class="row" style="margin-top: 4px;"><label>Shape</label><select id="i-shape" style="width:100%;"><option value="GAUSSIAN" ${
+						IMPULSE_SHAPE === "GAUSSIAN" ? "selected" : ""
+					}>Gaussian (Soft)</option><option value="SQUARE" ${
+						IMPULSE_SHAPE === "SQUARE" ? "selected" : ""
+					}>Square (Hard Edge)</option></select></div>`;
 					content += impulseControls;
 				} else if (brush === "DENSITY_PAINT") {
 					const densityControls = `
                     <h4 style="margin-top: 10px;">Density Paint Controls</h4>
-                    <label>Paint Density Val: <span id="l-pv" class="value-label">${mVal.toFixed(1)}</span></label>
+                    <label>Paint Density Val: <span id="l-pv" class="value-label">${mVal.toFixed(
+						1,
+					)}</span></label>
                     <input type="range" id="i-pv" min="0" max="1" step="0.1" value="${mVal}">
                     
-                    <label>Density Flow Rate (Softness): <span id="l-flow" class="value-label">${DEN_FLOW_RATE.toFixed(2)}</span></label>
+                    <label>Density Flow Rate (Softness): <span id="l-flow" class="value-label">${DEN_FLOW_RATE.toFixed(
+						2,
+					)}</span></label>
                     <input type="range" id="i-flow" min="0.01" max="1.0" step="0.01" value="${DEN_FLOW_RATE}">
 
                     <div class="row" style="margin-top: 4px;">
                         <label>Density Brush Mode</label>
                         <select id="i-den-mode" style="width:100%;">
-                            <option value="REPLACE" ${DEN_BRUSH_MODE === "REPLACE" ? "selected" : ""}>Replace/Blend</option>
-                            <option value="ADD" ${DEN_BRUSH_MODE === "ADD" ? "selected" : ""}>Add Only</option>
-                            <option value="SUBTRACT" ${DEN_BRUSH_MODE === "SUBTRACT" ? "selected" : ""}>Subtract Only</option>
+                            <option value="REPLACE" ${
+															DEN_BRUSH_MODE === "REPLACE" ? "selected" : ""
+														}>Replace/Blend</option>
+                            <option value="ADD" ${
+															DEN_BRUSH_MODE === "ADD" ? "selected" : ""
+														}>Add Only</option>
+                            <option value="SUBTRACT" ${
+															DEN_BRUSH_MODE === "SUBTRACT" ? "selected" : ""
+														}>Subtract Only</option>
                         </select>
                     </div>`;
 					content += densityControls;
@@ -3891,49 +4235,100 @@
 					return;
 				}
 
+				const layerOptions = layers
+					.map((l, i) => {
+						const name = l.name
+							.replace(/&/g, "&amp;")
+							.replace(/</g, "&lt;")
+							.replace(/>/g, "&gt;")
+							.replace(/"/g, "&quot;");
+						const optionText = `Layer ${i + 1} (${name})`;
+						return `<option value="${i}">${optionText}</option>`;
+					})
+					.join("");
+
+				const couplingTypeOptions = Object.entries(COUPLING_TYPES)
+					.map(
+						([key, value]) => `<option value="${key}">${value}</option>`,
+					)
+					.join("");
+
+				const targetPropertyOptions = [
+					{ value: "AMPLITUDE", label: "Amplitude (Wave Value)" },
+					{ value: "VELOCITY", label: "Velocity (Wave Change)" },
+				]
+					.map((opt) => `<option value="${opt.value}">${opt.label}</option>`)
+					.join("");
+
 				GLOBAL_COUPLING_LINKS.forEach((link, index) => {
 					const linkDiv = document.createElement("div");
 					linkDiv.className = "coupling-link";
 
-					const layerOptions = layers
-						.map((l, i) => {
-							const name = l.name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-							const optionText = `Layer ${i + 1} (${name})`;
-							return `<option value="${i}">${optionText}</option>`;
-						})
-						.join("");
 					const rateText = link.rate ? link.rate.toFixed(4) : "0.0000";
+
+					const isModulateDensity = link.type === "MODULATE_DENSITY";
+					const isSymmetricExchange = link.type === "ENERGY_EXCHANGE";
+					const isApplyForce = link.type === "APPLY_FORCE";
+
+					const srcLabel = isSymmetricExchange ? "Layer A" : "Source Layer";
+					const tgtLabel = isSymmetricExchange ? "Layer B" : "Target Layer";
 
 					linkDiv.innerHTML = `
                     <div class="row" style="justify-content: space-between;">
-                        <b>Link ${index + 1}</b>
+                        <b>Link ${index + 1} (${
+						COUPLING_TYPES[link.type] || "Unknown"
+					})</b>
                         <button onclick="deleteCouplingLink(${index})" style="width: 30px; padding: 0 4px; background: var(--color-danger); border-color: #844;">X</button>
                     </div>
                     
-                    <label>Source Layer</label>
+                    <label>${srcLabel}</label>
                     <select id="link_src_${index}" onchange="updateCouplingLink(${index}, 'sourceIdx', +this.value)">
                        ${layerOptions}
                     </select>
                     
-                    <label>Target Layer</label>
-                    <select id="link_tgt_${index}" onchange="updateCouplingLink(${index}, 'targetIdx', +this.value)">
-                       ${layerOptions}
+                    <label style="margin-top: 8px;">Coupling Type</label>
+                    <select id="link_type_${index}" onchange="updateCouplingLink(${index}, 'type', this.value)">
+                       ${couplingTypeOptions}
                     </select>
+
+                    <div id="target-layer-group-${index}" style="display:${
+						isSymmetricExchange ? "none" : "block"
+					};">
+                        <label>${tgtLabel}</label>
+                        <select id="link_tgt_${index}" onchange="updateCouplingLink(${index}, 'targetIdx', +this.value)">
+                           ${layerOptions}
+                        </select>
+                    </div>
                     
                     <label>Coupling Rate: <span id="l_rate_${index}" class="value-label">${rateText}</span></label>
-                    <input type="range" min="0" max="0.01" step="0.0001" value="${link.rate}" 
+                    <input type="range" min="0" max="1.0" step="0.0001" value="${
+											link.rate
+										}" 
                            data-link-index="${index}" data-link-property="rate"
                            class="custom-drag-slider coupling-rate-slider">
 
-                    <label>Target Property</label>
-                    <select onchange="updateCouplingLink(${index}, 'targetProperty', this.value)">
-                        <option value="AMPLITUDE" ${link.targetProperty === "AMPLITUDE" ? "selected" : ""}>Amplitude (Wave Value)</option>
-                        <option value="VELOCITY" ${link.targetProperty === "VELOCITY" ? "selected" : ""}>Velocity (Wave Change)</option>
-                    </select>
+                    <div id="target-prop-group-${index}" style="display:${
+						isApplyForce ? "block" : "none"
+					};">
+                        <label>Source Value (for Force)</label>
+                        <select onchange="updateCouplingLink(${index}, 'targetProperty', this.value)">
+                            ${targetPropertyOptions}
+                        </select>
+                    </div>
                 `;
 
 					linkDiv.querySelector(`#link_src_${index}`).value = link.sourceIdx;
-					linkDiv.querySelector(`#link_tgt_${index}`).value = link.targetIdx;
+
+					if (linkDiv.querySelector(`#link_tgt_${index}`)) {
+						linkDiv.querySelector(`#link_tgt_${index}`).value = link.targetIdx;
+					}
+
+					linkDiv.querySelector(`#link_type_${index}`).value = link.type;
+
+					if (isApplyForce) {
+						linkDiv.querySelector(`#target-prop-group-${index} select`).value =
+							link.targetProperty;
+					}
 
 					container.appendChild(linkDiv);
 				});
@@ -3950,6 +4345,7 @@
 					sourceIdx: 0,
 					targetIdx: Math.min(1, layers.length - 1),
 					rate: 0.001,
+					type: "ENERGY_EXCHANGE",
 					targetProperty: "AMPLITUDE",
 				});
 				renderCouplingMatrixUI();
@@ -3960,8 +4356,22 @@
 					GLOBAL_COUPLING_LINKS[index][property] = value;
 				}
 
-				if (property === "sourceIdx" || property === "targetIdx") {
+				if (
+					property === "sourceIdx" ||
+					property === "targetIdx" ||
+					property === "type"
+				) {
 					renderCouplingMatrixUI();
+
+					if (GLOBAL_COUPLING_LINKS[index].type === "ENERGY_EXCHANGE") {
+						const src = GLOBAL_COUPLING_LINKS[index].sourceIdx;
+						const tgt = GLOBAL_COUPLING_LINKS[index].targetIdx;
+						if (src === tgt) {
+							GLOBAL_COUPLING_LINKS[index].targetIdx =
+								(src + 1) % layers.length;
+							renderCouplingMatrixUI();
+						}
+					}
 				} else if (property === "rate") {
 					const label = $(`l_rate_${index}`);
 					if (label) label.innerText = value.toFixed(4);
@@ -4043,7 +4453,13 @@
 						var gradientControlsHtml = `<h4 style="border-bottom:none; margin-top: 5px;">Gradient Stops (${l.gradientStops.length}/${MAX_GRADIENT_STOPS})</h4>`;
 						l.gradientStops.forEach((stop, index) => {
 							var colorInputId = `color_stop_${l.id}_${index}`;
-							gradientControlsHtml += `<div class="color-picker-row"><label>Stop ${index}</label><input type="color" id="${colorInputId}" value="${toHex(stop)}" oninput="var c=this.value; layers[${i}].gradientStops[${index}]=hexToRgb(c); window.updateLayerBorder_${i}(c); updTr(); syncM();">${l.gradientStops.length > 1 ? `<button onclick="window.removeStop_${i}(${index})">-</button>` : ""}</div>`;
+							gradientControlsHtml += `<div class="color-picker-row"><label>Stop ${index}</label><input type="color" id="${colorInputId}" value="${toHex(
+								stop,
+							)}" oninput="var c=this.value; layers[${i}].gradientStops[${index}]=hexToRgb(c); window.updateLayerBorder_${i}(c); syncM();">${
+								l.gradientStops.length > 1
+									? `<button onclick="window.removeStop_${i}(${index})">-</button>`
+									: ""
+							}</div>`;
 						});
 						if (l.gradientStops.length < MAX_GRADIENT_STOPS) {
 							gradientControlsHtml += `<button onclick="window.addStop_${i}()">+ Add Stop</button>`;
@@ -4052,12 +4468,16 @@
 						var shadingSelectId = `shade_${l.id}`;
 						var visModeSelectId = `vis_${l.id}`;
 
-						const formulaSelectHtml = `<label>Simulation Model</label><select id="formula_select_${l.id}" onchange="updateLayerFormula(${i}, this.value)">${Object.keys(
+						const formulaSelectHtml = `<label>Simulation Model</label><select id="formula_select_${
+							l.id
+						}" onchange="updateLayerFormula(${i}, this.value)">${Object.keys(
 							FORMULA_PRESETS,
 						)
 							.map(
 								(key) =>
-									`<option value="${key}" ${formulaKey === key ? "selected" : ""}>${FORMULA_PRESETS[key].name}</option>`,
+									`<option value="${key}" ${
+										formulaKey === key ? "selected" : ""
+									}>${FORMULA_PRESETS[key].name}</option>`,
 							)
 							.join("")}</select>`;
 
@@ -4065,18 +4485,122 @@
 						const dInputId = `i-d-${l.id}`;
 						const kInputId = `i-k-${l.id}`;
 
-						const pointSizeControls = `<div id="point_size_controls_${l.id}" style="margin-top: 8px; display: ${l.visMode === "POINTS" ? "block" : "none"};">
-                        <label>Point Base Size: <span id="l-psz_${l.id}" class="value-label">${l.pointSize.toFixed(1)}</span></label>
-                        <input type="range" id="i-psz-${l.id}" min="0.1" max="20.0" step="0.1" value="${l.pointSize}" oninput="layers[${i}].pointSize = parseFloat(this.value); document.getElementById('l-psz_${l.id}').innerText = this.value; updTr();">
-                        <label>Point Scale Factor: <span id="l-psc_${l.id}" class="value-label">${l.pointScaleFactor.toFixed(1)}</span></label>
-                        <input type="range" id="i-psc-${l.id}" min="0.0" max="10.0" step="0.1" value="${l.pointScaleFactor}" oninput="layers[${i}].pointScaleFactor = parseFloat(this.value); document.getElementById('l-psc_${l.id}').innerText = this.value; updTr();">
-                        <label>Point Falloff: <span id="l-pf_${l.id}" class="value-label">${l.pointFalloff.toFixed(2)}</span></label>
-                        <input type="range" id="i-pf-${l.id}" min="0.0" max="1.0" step="0.01" value="${l.pointFalloff}" oninput="layers[${i}].pointFalloff = parseFloat(this.value); document.getElementById('l-pf_${l.id}').innerText = this.value; updTr();">
+						const pointSizeControls = `<div id="point_size_controls_${l.id}" style="margin-top: 8px; display: ${
+							l.visMode === "POINTS" ? "block" : "none"
+						};">
+                        <label>Point Base Size: <span id="l-psz_${
+							l.id
+						}" class="value-label">${l.pointSize.toFixed(1)}</span></label>
+                        <input type="range" id="i-psz-${
+							l.id
+						}" min="0.1" max="20.0" step="0.1" value="${
+							l.pointSize
+						}" oninput="layers[${i}].pointSize = parseFloat(this.value); document.getElementById('l-psz_${
+							l.id
+						}').innerText = this.value; syncM();">
+                        <label>Point Scale Factor: <span id="l-psc_${
+							l.id
+						}" class="value-label">${l.pointScaleFactor.toFixed(
+							1,
+						)}</span></label>
+                        <input type="range" id="i-psc-${
+							l.id
+						}" min="0.0" max="10.0" step="0.1" value="${
+							l.pointScaleFactor
+						}" oninput="layers[${i}].pointScaleFactor = parseFloat(this.value); document.getElementById('l-psc_${
+							l.id
+						}').innerText = this.value; syncM();">
+                        <label>Point Falloff: <span id="l-pf_${
+							l.id
+						}" class="value-label">${l.pointFalloff.toFixed(
+							2,
+						)}</span></label>
+                        <input type="range" id="i-pf-${
+							l.id
+						}" min="0.0" max="1.0" step="0.01" value="${
+							l.pointFalloff
+						}" oninput="layers[${i}].pointFalloff = parseFloat(this.value); document.getElementById('l-pf_${
+							l.id
+						}').innerText = this.value; syncM();">
                     </div>`;
-					
-						const escapedName = l.name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-						b.innerHTML = `<div class="row"><b>${escapedName}</b><input type="checkbox" id="layer_vis_checkbox_${l.id}" ${l.vis ? "checked" : ""} onchange="layers[${i}].vis=this.checked; updateLayerParamUI(${i}, 'vis');"><label for="layer_vis_checkbox_${l.id}" style="margin-right:8px; width: auto;">Vis</label><input type="checkbox" id="layer_intr_checkbox_${l.id}" ${l.intr ? "checked" : ""} onchange="layers[${i}].intr=this.checked; updateLayerParamUI(${i}, 'intr');"><label for="layer_intr_checkbox_${l.id}" style="width: auto;">Int</label></div><div class="expandable-header" data-target="layer-sim-controls-${l.id}">Simulation Parameters <span class="expand-arrow">&#x25B8;</span></div><div id="layer-sim-controls-${l.id}" class="expandable-content">${formulaSelectHtml}<div id="sim_controls_${l.id}"><label><b>${cLabel}</b> (<span id="l-c-${l.id}" class="value-label">${l.C.toFixed(3)}</span>)</label><input type="range" id="${cInputId}" min="0.01" max="${preset.C_max}" step="0.01" value="${l.C}"><label><b>${dLabel}</b> (<span id="l-d-${l.id}" class="value-label">${l.D.toFixed(3)}</span>)</label><input type="range" id="${dInputId}" min="0" max="${preset.D_max}" step="0.001" value="${l.D}"></div><label>Vertical/Legacy Coupling (K) (<span id="l-k-${l.id}" class="value-label">${l.K.toFixed(3)}</span>)</label><input type="range" id="${kInputId}" min="0" max="0.1" step="0.005" value="${l.K}"><div class="row"><label>Bnd</label><select onchange="layers[${i}].bnd=this.value;"><option value="FIXED" ${l.bnd === "FIXED" ? "selected" : ""}>FIXED (Wall)</option><option value="ABSORBING" ${l.bnd === "ABSORBING" ? "selected" : ""}>ABSORBING (Open)</option></select></div><div class="row"><button onclick="u[${i}].fill(0); u_prev[${i}].fill(0); updTr();">Rst Wav</button><button onclick="window.resetDen_${i}()">Rst Den</button></div></div><div class="expandable-header" data-target="layer-vis-controls-${l.id}">Visualization & Styling <span class="expand-arrow">&#x25B8;</span></div><div id="layer-vis-controls-${l.id}" class="expandable-content">${gradientControlsHtml}<div class="row"><label>Vis Mode</label><select id="${visModeSelectId}" onchange="layers[${i}].visMode=this.value;syncM();updateLayerListUI();"><option value="MESH" ${l.visMode === "MESH" ? "selected" : ""}>Mesh (Surface)</option><option value="POINTS" ${l.visMode === "POINTS" ? "selected" : ""}>Points (Vector)</option></select></div><div class="row"><label>Shading Mode</label><select id="${shadingSelectId}" onchange="layers[${i}].shadingMode=this.value;syncM();"><option value="SPECULAR" ${l.shadingMode === "SPECULAR" ? "selected" : ""}>Default (Specular)</option><option value="HEIGHT" ${l.shadingMode === "HEIGHT" ? "selected" : ""}>Height-Based</option><option value="VELOCITY" ${l.shadingMode === "VELOCITY" ? "selected" : ""}>Velocity Gradient</option><option value="ENERGY" ${l.shadingMode === "ENERGY" ? "selected" : ""}>Heatmap (Energy)</option><option value="DIVERGENCE" ${l.shadingMode === "DIVERGENCE" ? "selected" : ""}>Divergence (Red/Blue)</option><option value="VECTOR_RGB" ${l.shadingMode === "VECTOR_RGB" ? "selected" : ""}>Vector RGB</option></select></div>${pointSizeControls}<label>Grad. Bias: <span id="l-gb_${l.id}" class="value-label">${l.gradientBias.toFixed(2)}</span></label><input type="range" id="i-gb-${l.id}" min="-1.0" max="1.0" step="0.05" value="${l.gradientBias}"><label>Grad. Contrast: <span id="l-gc_${l.id}" class="value-label">${l.gradientContrast.toFixed(1)}</span></label><input type="range" id="i-gc-${l.id}" min="0.1" max="5.0" step="0.1" value="${l.gradientContrast}"></div>`;
+						const escapedName = l.name
+							.replace(/&/g, "&amp;")
+							.replace(/</g, "&lt;")
+							.replace(/>/g, "&gt;")
+							.replace(/"/g, "&quot;");
+
+						b.innerHTML = `<div class="row"><b>${escapedName}</b><input type="checkbox" id="layer_vis_checkbox_${l.id}" ${
+							l.vis ? "checked" : ""
+						} onchange="layers[${i}].vis=this.checked; updateLayerParamUI(${i}, 'vis');"><label for="layer_vis_checkbox_${
+							l.id
+						}" style="margin-right:8px; width: auto;">Vis</label><input type="checkbox" id="layer_intr_checkbox_${
+							l.id
+						}" ${
+							l.intr ? "checked" : ""
+						} onchange="layers[${i}].intr=this.checked; updateLayerParamUI(${i}, 'intr');"><label for="layer_intr_checkbox_${
+							l.id
+						}" style="width: auto;">Int</label></div><div class="expandable-header" data-target="layer-sim-controls-${
+							l.id
+						}">Simulation Parameters <span class="expand-arrow">&#x25B8;</span></div><div id="layer-sim-controls-${
+							l.id
+						}" class="expandable-content">${formulaSelectHtml}<div id="sim_controls_${
+							l.id
+						}"><label><b>${cLabel}</b> (<span id="l-c-${l.id}" class="value-label">${l.C.toFixed(
+							3,
+						)}</span>)</label><input type="range" id="${cInputId}" min="0.01" max="${
+							preset.C_max
+						}" step="0.01" value="${l.C}"><label><b>${dLabel}</b> (<span id="l-d-${
+							l.id
+						}" class="value-label">${l.D.toFixed(
+							3,
+						)}</span>)</label><input type="range" id="${dInputId}" min="0" max="${
+							preset.D_max
+						}" step="0.001" value="${l.D}"></div><label>Vertical/Legacy Coupling (K) (<span id="l-k-${
+							l.id
+						}" class="value-label">${l.K.toFixed(
+							3,
+						)}</span>)</label><input type="range" id="${kInputId}" min="0" max="0.1" step="0.005" value="${
+							l.K
+						}"><div class="row"><label>Bnd</label><select onchange="layers[${i}].bnd=this.value;"><option value="FIXED" ${
+							l.bnd === "FIXED" ? "selected" : ""
+						}>FIXED (Wall)</option><option value="ABSORBING" ${
+							l.bnd === "ABSORBING" ? "selected" : ""
+						}>ABSORBING (Open)</option></select></div><div class="row"><button onclick="u[${i}].fill(0); u_prev[${i}].fill(0); syncM();">Rst Wav</button><button onclick="window.resetDen_${i}()">Rst Den</button></div></div><div class="expandable-header" data-target="layer-vis-controls-${
+							l.id
+						}">Visualization & Styling <span class="expand-arrow">&#x25B8;</span></div><div id="layer-vis-controls-${
+							l.id
+						}" class="expandable-content">${gradientControlsHtml}<div class="row"><label>Vis Mode</label><select id="${visModeSelectId}" onchange="layers[${i}].visMode=this.value;syncM();updateLayerListUI();"><option value="MESH" ${
+							l.visMode === "MESH" ? "selected" : ""
+						}>Mesh (Surface)</option><option value="POINTS" ${
+							l.visMode === "POINTS" ? "selected" : ""
+						}>Points (Vector)</option></select></div><div class="row"><label>Shading Mode</label><select id="${shadingSelectId}" onchange="layers[${i}].shadingMode=this.value;syncM();"><option value="SPECULAR" ${
+							l.shadingMode === "SPECULAR" ? "selected" : ""
+						}>Default (Specular)</option><option value="HEIGHT" ${
+							l.shadingMode === "HEIGHT" ? "selected" : ""
+						}>Height-Based</option><option value="VELOCITY" ${
+							l.shadingMode === "VELOCITY" ? "selected" : ""
+						}>Velocity Gradient</option><option value="ENERGY" ${
+							l.shadingMode === "ENERGY" ? "selected" : ""
+						}>Heatmap (Energy)</option><option value="DIVERGENCE" ${
+							l.shadingMode === "DIVERGENCE" ? "selected" : ""
+						}>Divergence (Red/Blue)</option><option value="VECTOR_RGB" ${
+							l.shadingMode === "VECTOR_RGB" ? "selected" : ""
+						}>Vector RGB</option></select></div>${pointSizeControls}<label>Grad. Bias: <span id="l-gb_${
+							l.id
+						}" class="value-label">${l.gradientBias.toFixed(
+							2,
+						)}</span></label><input type="range" id="i-gb-${
+							l.id
+						}" min="-1.0" max="1.0" step="0.05" value="${
+							l.gradientBias
+						}"><label>Grad. Contrast: <span id="l-gc_${
+							l.id
+						}" class="value-label">${l.gradientContrast.toFixed(
+							1,
+						)}</span></label><input type="range" id="i-gc-${l.id}" min="0.1" max="5.0" step="0.1" value="${
+							l.gradientContrast
+						}"></div>`;
 						d.appendChild(b);
 
 						const cInputEl = $(cInputId);
@@ -4165,6 +4689,7 @@
 				$("l-gap").innerText = GAP;
 				$("l-z").innerText = ZSC.toFixed(1);
 				$("l-li").innerText = lInt;
+				$("l-refl").innerText = REFLECTIVITY.toFixed(2);
 				$("l-vo").innerText = parseFloat($("i-vo").value).toFixed(2);
 				$("l-vd").innerText = VOL_LAYERS;
 				$("l-psz").innerText = BASE_POINT_SETTINGS.pointSize.toFixed(1);
@@ -4350,6 +4875,13 @@
 				EV("btn-save-preset", "click", savePresetFile);
 				EV("btn-load-preset", "click", loadPresetFile);
 
+				EV("btn-save-formula", "click", saveFormulaFile);
+				EV("btn-load-formula", "click", loadFormulaFile);
+				EV("btn-test-formula", "click", updateCustomFormula);
+				EV("custom-name", "input", updateCustomFormula);
+				EV("custom-vars", "input", updateCustomFormula);
+				EV("custom-code", "input", updateCustomFormula);
+
 				EV("btn-add-coupling", "click", addCouplingLink);
 
 				const btnVol = $("btn-vol");
@@ -4459,15 +4991,15 @@
 					lInt = +e.target.value;
 					$("l-li").innerText = lInt;
 				};
+				$("i-refl").oninput = (e) => {
+					REFLECTIVITY = +e.target.value;
+					$("l-refl").innerText = REFLECTIVITY.toFixed(2);
+					syncM();
+				};
 				$("i-vo").oninput = (e) => {
 					var op = parseFloat(e.target.value);
 					$("l-vo").innerText = op.toFixed(2);
-					meshes.forEach((m) => {
-						if (m.material.uniforms && m.material.uniforms.uOpacity) {
-							m.material.uniforms.uOpacity.value = op;
-						}
-					});
-                    syncM(); // Resync materials when opacity changes (to toggle depthWrite/Blending)
+					syncM();
 				};
 
 				$("i-exposure").oninput = (e) => {
@@ -4714,37 +5246,41 @@
 				renderer = new THREE.WebGLRenderer({ antialias: true });
 				renderer.setSize(W, H);
 				renderer.setPixelRatio(window.devicePixelRatio);
-                renderer.sortObjects = false; // Disable automatic object sorting
+				renderer.sortObjects = false;
 				canvasContainer.appendChild(renderer.domElement);
 				raycaster = new THREE.Raycaster();
 				raycaster.layers.set(0);
 				scene.add(new THREE.AmbientLight(0x404040));
 				scene.add(new THREE.DirectionalLight(0xffffff, 0.6));
 				window.addEventListener("resize", onResize, false);
-                
-                // 1. Load skybox.png (6x1 horizontal strip)
-                const loader = new THREE.CubeTextureLoader();
-                const filePaths = ['skybox.png', 'skybox.png', 'skybox.png', 'skybox.png', 'skybox.png', 'skybox.png'];
-                
-                loader.load(filePaths, 
-                    // Success handler
-                    (texture) => {
-                        texture.mapping = THREE.CubeReflectionMapping;
-                        cubeRenderTarget = texture;
-                        scene.background = cubeRenderTarget;
-                        scene.environment = cubeRenderTarget;
-                        syncM(); // Update materials with the new cubemap
-                    }, 
-                    // Error handler (Fallback to black)
-                    (err) => {
-                        console.warn('Skybox loading failed (skybox.png not found or inaccessible). Falling back to black background.');
-                        cubeRenderTarget = createBlackCubemap();
-                        scene.background = new THREE.Color(0x000000);
-                        scene.environment = cubeRenderTarget; 
-                        syncM();
-                    }
-                );
-                
+
+				const loader = new THREE.CubeTextureLoader();
+				const filePaths = [
+					"skybox.png",
+					"skybox.png",
+					"skybox.png",
+					"skybox.png",
+					"skybox.png",
+					"skybox.png",
+				];
+
+				loader.load(
+					filePaths,
+					(texture) => {
+						texture.mapping = THREE.CubeReflectionMapping;
+						cubeRenderTarget = texture;
+						scene.background = cubeRenderTarget;
+						scene.environment = cubeRenderTarget;
+						syncM();
+					},
+					(err) => {
+						cubeRenderTarget = createBlackCubemap();
+						scene.background = new THREE.Color(0x000000);
+						scene.environment = cubeRenderTarget;
+						syncM();
+					},
+				);
+
 				canvasContainer.addEventListener("mousedown", (e) => {
 					if (e.button === 2) {
 						isOrbit = true;
@@ -4935,49 +5471,53 @@
 						if (intersection) {
 							newPos.sub(dragStartOffset);
 
-							const DZ_LAYER = GAP * 0.1;
-							const gridScale = 50.0 / (GRID - 1);
+							const layerSpacing = getLayerSpacing();
+							const worldToGrid = getWorldToGridScale();
+							const totalHeight = (layers.length - 1) * layerSpacing;
+							const centerYOffset = IS_3D_MODE ? totalHeight / 2 : 0;
 
-							const { i: newI, j: newJ } = wtg(newPos.x, newPos.z);
+							const gridI = Math.min(
+								GRID - 1,
+								Math.max(0, ((newPos.z + 25) / 50) * GRID) | 0,
+							);
+							const gridJ = Math.min(
+								GRID - 1,
+								Math.max(0, ((newPos.x + 25) / 50) * GRID) | 0,
+							);
 
 							let newLIdx = em.lIdx;
 							if (IS_3D_MODE) {
-								const layerCenterY = gtw(
-									GRID / 2,
-									GRID / 2,
-									Math.floor(layers.length / 2),
-								).y;
 								newLIdx = Math.round(
-									(layerCenterY - newPos.y) / DZ_LAYER +
-										Math.floor(layers.length / 2),
+									(centerYOffset - newPos.y) * worldToGrid.y,
 								);
 								newLIdx = Math.max(0, Math.min(layers.length - 1, newLIdx));
+							} else {
+								newLIdx = em.lIdx;
 							}
 
-							const oldI = em.i,
-								oldJ = em.j;
 							em.lIdx = newLIdx;
 
 							if (em.geo === "LINE") {
 								if (actEmitPart === "START") {
-									em.i = newI;
-									em.j = newJ;
+									em.i = gridI;
+									em.j = gridJ;
 								} else if (actEmitPart === "END") {
-									em.i2 = newI;
-									em.j2 = newJ;
+									em.i2 = gridI;
+									em.j2 = gridJ;
 								} else {
-									const deltaI = newI - oldI;
-									const deltaJ = newJ - oldJ;
-									em.i += deltaI;
-									em.j += deltaJ;
-									em.i2 += deltaI;
-									em.j2 += deltaJ;
+									const deltaI = gridI - (em.i + em.i2) / 2;
+									const deltaJ = gridJ - (em.j + em.j2) / 2;
+
+									em.i = Math.round(em.i + deltaI);
+									em.j = Math.round(em.j + deltaJ);
+									em.i2 = Math.round(em.i2 + deltaI);
+									em.j2 = Math.round(em.j2 + deltaJ);
 								}
 							} else if (em.geo === "POINT") {
-								em.i = newI;
-								em.j = newJ;
-								em.i2 = newI;
-								em.j2 = newJ;
+								em.i = gridI;
+								em.j = gridJ;
+								em.i2 = gridI;
+								em.j2 = gridJ;
 							}
 
 							em.i = Math.max(0, Math.min(GRID - 1, em.i));
@@ -4993,11 +5533,11 @@
 					if (brush === "DISTURBANCE" || brush === "DENSITY_PAINT") {
 						if (hit && hit.point) {
 							const targetLIdx =
-								(hit.lIdx !== undefined
+								hit.lIdx !== undefined
 									? hit.lIdx
 									: activeBrushHit
-										? activeBrushHit.lIdx
-										: -1);
+									? activeBrushHit.lIdx
+									: -1;
 							activeBrushHit = { i: hit.i, j: hit.j, lIdx: targetLIdx };
 						}
 					}
@@ -5037,6 +5577,7 @@
 					{ passive: false },
 				);
 
+				updateCustomFormula();
 				fullResetConfig(DEFAULT_STATE_CONFIG);
 				loop();
 			}
@@ -5045,8 +5586,8 @@
 				setupGlobalEvents();
 				setupSliderListeners();
 				setupCustomSliderDrag();
-				loadSkybox(); // Initiate skybox loading first
-				setupScene(); // Scene setup relies on loadSkybox filling cubeRenderTarget
+				loadSkybox();
+				setupScene();
 				document.querySelector("#b-dist").click();
 				updateUI();
 			}
