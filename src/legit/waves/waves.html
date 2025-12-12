@@ -953,7 +953,7 @@
               type="range"
               id="i-vis"
               min="0.0"
-              max="1.0"
+              max="0.5"
               value="0.0"
               step="0.001"
             />
@@ -3252,21 +3252,12 @@ function sim() {
         PROBE_TIME_STEP_COUNTER++;
         var DT2 = DT_FACTOR * DT_FACTOR;
         var max_wave_abs = 0.0;
-
-        // ----------------------------------------------------
+        
         // NEW: Map user 0.0-1.0 to internal damping factor
-        // 0.0 (User Viscosity) -> 1.0 (No Damping)
-        // 1.0 (User Viscosity) -> 0.90 (Max Damping)
         const USER_VISCOSITY_FACTOR = parseFloat($("i-vis").value);
-        // We use a safe internal minimum damping factor, e.g., 0.90
         const MIN_DAMPING_FACTOR = 0.90; 
         const DAMPING_RANGE = 1.0 - MIN_DAMPING_FACTOR; 
-        
-        // Final Damping Factor (closer to 1.0 = less damping)
-        // UserVisc=0.0 -> 1.0 - (0.0 * DAMPING_RANGE) = 1.0
-        // UserVisc=1.0 -> 1.0 - (1.0 * DAMPING_RANGE) = 0.90
         const GLOBAL_VISCOSITY_FACTOR = 1.0 - (USER_VISCOSITY_FACTOR * DAMPING_RANGE);
-        // ----------------------------------------------------
         
         recordProbeData(); 
 
@@ -3413,6 +3404,7 @@ function sim() {
           const isTopBoundary = (idx === 0);
           const isBottomBoundary = (idx === layers.length - 1);
           const isZAbsorbing = IS_3D_MODE && IS_VOL_ABSORBING_BND;
+          const isIsotropic = IS_3D_MODE && $("cb-iso").checked;
 
           for (let i = 1; i < N - 1; i++) {
             const offset = i * N;
@@ -3431,12 +3423,63 @@ function sim() {
               const U_CURR = u_current_arr[ptr];
               const U_PREV = u_prev_arr[ptr];
 
-              const lap =
-                u_current_arr[ptr + 1] +
-                u_current_arr[ptr - 1] +
-                u_current_arr[ptr + N] +
-                u_current_arr[ptr - N] -
-                4 * U_CURR;
+              // --- FIX 2: Correct Laplacian Calculation ---
+              let lap =
+                u_current_arr[ptr + 1] + // +X
+                u_current_arr[ptr - 1] + // -X
+                u_current_arr[ptr + N] + // +Y
+                u_current_arr[ptr - N]; // -Y
+              
+              let COUPLING_TERM = 0; 
+
+              if (isIsotropic) {
+                  // If isotropic, we calculate the full 3D Laplacian.
+                  
+                  if (isZAbsorbing && (isTopBoundary || isBottomBoundary)) {
+                       // If it's a boundary and absorbing, skip the Z-Laplacian 
+                       // and calculate the Z-ABC boundary update value directly.
+                       const U_NEIGH_CURR = isTopBoundary ? u_above_arr[ptr] : u_below_arr[ptr];
+                       const val_z_abc = U_NEIGH_CURR + murCoeff * (U_NEIGH_CURR - U_CURR);
+                       u_next_arr[ptr] = val_z_abc;
+                       continue;
+                  }
+                  
+                  // For all other points (interior or fixed-boundary): include the Z-Laplacian
+                  let U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
+                  let U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
+                  
+                  if (!isZAbsorbing) {
+                      // Fixed boundary: Hard wall reflection 
+                      if (isTopBoundary) U_ABOVE = U_CURR;
+                      if (isBottomBoundary) U_BELOW = U_CURR;
+                  }
+                  
+                  lap += U_ABOVE + U_BELOW;
+                  lap -= 6 * U_CURR; // Full 3D Laplacian (6 neighbors - 6 * center)
+                  
+              } else if (IS_3D_MODE) {
+                  // Anisotropic or Fixed K: Use 2D Laplacian + K-Coupling
+                  lap -= 4 * U_CURR; // 2D Laplacian (4 neighbors - 4 * center)
+                  
+                  let U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
+                  let U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
+                  
+                  if (!isZAbsorbing) {
+                      if (isTopBoundary) U_ABOVE = 0;
+                      if (isBottomBoundary) U_BELOW = 0;
+                  }
+                  
+                  COUPLING_TERM = K_FACTOR * (U_ABOVE + U_BELOW - 2 * U_CURR);
+              } else {
+                // 2D mode (Layers)
+                lap -= 4 * U_CURR;
+                const U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
+                const U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
+                COUPLING_TERM =
+                  K_FACTOR * (K_BELOW * (U_BELOW - U_CURR) + K_CURR * (U_ABOVE - U_CURR));
+              }
+
+              // End of Laplacian/Coupling Logic
 
               const C_density = effectiveDensity > 0 ? finalC * (1 - effectiveDensity) : finalC;
 
@@ -3451,45 +3494,12 @@ function sim() {
                 D_final += GLOBAL_DEN_ABSORPTION * globalDensity;
               }
 
-              let COUPLING_TERM = 0;
               let EXTERNAL_COUPLING_TERM = externalCouplingArr[ptr] * DT_FACTOR;
 
-              if (IS_3D_MODE) {
-                  let U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
-                  let U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
-                  
-                  if (isZAbsorbing) {
-                       if (isTopBoundary) {
-                            const U_NEIGH_CURR = u_above_arr[ptr];
-                            const val_z_abc = U_NEIGH_CURR + murCoeff * (U_NEIGH_CURR - U_CURR);
-                            u_next_arr[ptr] = val_z_abc;
-                            COUPLING_TERM = 0; 
-                            continue;
-                       } else if (isBottomBoundary) {
-                            const U_NEIGH_CURR = u_below_arr[ptr];
-                            const val_z_abc = U_NEIGH_CURR + murCoeff * (U_NEIGH_CURR - U_CURR);
-                            u_next_arr[ptr] = val_z_abc;
-                            COUPLING_TERM = 0; 
-                            continue;
-                       }
-                  } else {
-                      // Fixed Boundary (Hard Wall)
-                      if (isTopBoundary) U_ABOVE = 0;
-                      if (isBottomBoundary) U_BELOW = 0;
-                  }
-                  
-                  COUPLING_TERM = K_FACTOR * (U_ABOVE + U_BELOW - 2 * U_CURR);
-                  
-              } else {
-                // 2D mode Z-coupling (if layers are active)
-                const U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
-                const U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
-                COUPLING_TERM =
-                  K_FACTOR * (K_BELOW * (U_BELOW - U_CURR) + K_CURR * (U_ABOVE - U_CURR));
-              }
-
               let val;
-
+              
+              // ... (Formula evaluation is the same) ...
+              
               if (formulaFn) {
                 const scope = {
                   U_CURR: U_CURR,
@@ -3505,10 +3515,12 @@ function sim() {
                 };
                 val = formulaFn.call({ vars: scope });
               } else if (l.formulaKey === "WAVE") {
+                // IMPORTANT: For isotropic 3D, COUPLING_TERM is 0, lap is 3D Laplacian.
+                // For anisotropic 3D, COUPLING_TERM is Z-coupling, lap is 2D Laplacian.
                 val =
                   2 * U_CURR -
                   U_PREV +
-                  C_final * lap * DT2 -
+                  C_final * lap * DT2 - 
                   D_final * (U_CURR - U_PREV) +
                   COUPLING_TERM +
                   EXTERNAL_COUPLING_TERM;
@@ -3535,9 +3547,6 @@ function sim() {
                   C_final * lap * DT2 -
                   D_final * (U_CURR - U_PREV);
               }
-
-              // --- OLD Viscosity REMOVED HERE ---
-              // if (VISCOSITY > 0) val -= (val - U_CURR) * DT_factor_viscosity;
               
               val = Math.max(-10.0, Math.min(10.0, val));
               u_next_arr[ptr] = val;
