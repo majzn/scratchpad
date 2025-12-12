@@ -3491,7 +3491,8 @@ function sim() {
 
               let D_final = finalD;
               if (globalDensity > 0) {
-                D_final += GLOBAL_DEN_ABSORPTION * globalDensity;
+                const C_global_refract = 1.0 + globalDensity * (GLOBAL_DEN_REFRACTION - 1.0);
+                C_final = C_density / C_global_refract;
               }
 
               let EXTERNAL_COUPLING_TERM = externalCouplingArr[ptr] * DT_FACTOR;
