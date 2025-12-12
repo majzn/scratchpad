@@ -656,7 +656,7 @@
                 id="i-vis-min"
                 min="0"
                 max="1"
-                step="0.001"
+                step="0.0001"
                 value="0.0"
                 title="Min Threshold"
               />
@@ -665,7 +665,7 @@
                 id="i-vis-max"
                 min="0"
                 max="1"
-                step="0.001"
+                step="0.0001"
                 value="1.0"
                 title="Max Threshold"
               />
@@ -802,6 +802,16 @@
                       >Isotropic</label
                     >
                   </div>
+<div class="row" style="margin-top: 4px; margin-bottom: 4px;">
+    <input
+      type="checkbox"
+      id="cb-vol-absorb"
+      style="width: auto; margin: 0"
+    />
+    <label for="cb-vol-absorb" style="margin-left: 4px; color: #fff; width: auto;"
+      >3D Absorbing Boundary (Open)</label
+    >
+  </div>
                   <div class="row">
                     <input
                       type="checkbox"
@@ -1020,11 +1030,12 @@
         step="0.05"
       />
 
-      <label>Stamping Mode (Click to Stamp)</label>
-      <select id="sdf-mode-toggle" style="width: 100%">
-        <option value="REPLACE">Replace (Overwrite Density)</option>
-        <option value="ADD">Add (Increase Density, Max 1.0)</option>
-      </select>
+<label>Stamping Mode (Click to Stamp)</label>
+<select id="sdf-mode-toggle" style="width: 100%">
+  <option value="REPLACE">Replace (Overwrite Layer Density)</option>
+  <option value="ADD">Add (Increase Layer Density, Max 1.0)</option>
+  <option value="GLOBAL">Stamp Global Density</option>
+</select>
 
       <div class="row" style="margin-top: 8px; justify-content: flex-end">
         <button id="sdf-close">Close</button>
@@ -1171,7 +1182,7 @@
       var visMin = 0.0,
         visMax = 1.0;
       var cubeRenderTarget = null;
-      
+      var IS_VOL_ABSORBING_BND = false;
       var PROBE_HISTORY = [];
       var PROBE_HISTORY_LENGTH = 6000;
       var MAX_HISTORY_LENGTH = 48000;
@@ -2587,7 +2598,7 @@ void main() {
         const finalCenterI = IS_3D_MODE ? GRID / 2 : centerI;
         const finalCenterJ = IS_3D_MODE ? GRID / 2 : centerJ;
 
-        const isGlobalStamp = !IS_3D_MODE && layerIndex === -1;
+        const isGlobalStamp = SDF_STAMP_MODE === "GLOBAL";
 
         for (let r = 0; r < GRID; r++) {
           for (let c = 0; c < GRID; c++) {
@@ -2596,9 +2607,7 @@ void main() {
 
             if (isGlobalStamp) {
               if (d > 0) {
-                if (SDF_STAMP_MODE === "REPLACE") GLOBAL_DEN[idx] = d;
-                else if (SDF_STAMP_MODE === "ADD")
-                  GLOBAL_DEN[idx] = Math.min(1.0, GLOBAL_DEN[idx] + d);
+	GLOBAL_DEN[idx] = d;
               }
             } else {
               for (let L = L_START; L < L_END; L++) {
@@ -3235,7 +3244,7 @@ void main() {
           return activeProbeCount > 0 ? totalValue / activeProbeCount : 0;
       }
 
-      function sim() {
+function sim() {
         if (!layers.length) return;
         var N = GRID;
 
@@ -3243,6 +3252,21 @@ void main() {
         PROBE_TIME_STEP_COUNTER++;
         var DT2 = DT_FACTOR * DT_FACTOR;
         var max_wave_abs = 0.0;
+
+        // ----------------------------------------------------
+        // NEW: Map user 0.0-1.0 to internal damping factor
+        // 0.0 (User Viscosity) -> 1.0 (No Damping)
+        // 1.0 (User Viscosity) -> 0.90 (Max Damping)
+        const USER_VISCOSITY_FACTOR = parseFloat($("i-vis").value);
+        // We use a safe internal minimum damping factor, e.g., 0.90
+        const MIN_DAMPING_FACTOR = 0.90; 
+        const DAMPING_RANGE = 1.0 - MIN_DAMPING_FACTOR; 
+        
+        // Final Damping Factor (closer to 1.0 = less damping)
+        // UserVisc=0.0 -> 1.0 - (0.0 * DAMPING_RANGE) = 1.0
+        // UserVisc=1.0 -> 1.0 - (1.0 * DAMPING_RANGE) = 0.90
+        const GLOBAL_VISCOSITY_FACTOR = 1.0 - (USER_VISCOSITY_FACTOR * DAMPING_RANGE);
+        // ----------------------------------------------------
         
         recordProbeData(); 
 
@@ -3298,7 +3322,6 @@ void main() {
           volK = BASE_LAYER_CFG.K;
         }
 
-        // FIX: Ensure these local variables are defined/cleared for every simulation step
         const layerCouplingContributions = layers.map(() => new Float32Array(N * N));
         const layerDensityModulations = layers.map(() => new Float32Array(N * N));
 
@@ -3359,7 +3382,10 @@ void main() {
           const den_arr = den[idx];
 
           const u_above_arr = idx < layers.length - 1 ? u[idx + 1] : null;
+          const u_prev_above_arr = idx < layers.length - 1 ? u_prev[idx + 1] : null;
+          
           const u_below_arr = idx > 0 ? u[idx - 1] : null;
+          const u_prev_below_arr = idx > 0 ? u_prev[idx - 1] : null;
 
           const K_BELOW = idx > 0 ? layers[idx - 1].K : 0;
           const K_CURR = l.K;
@@ -3381,6 +3407,12 @@ void main() {
               }
             });
           }
+
+          const S_factor = Math.sqrt(finalC) * DT_FACTOR;
+          const murCoeff = (S_factor - 1.0) / (S_factor + 1.0);
+          const isTopBoundary = (idx === 0);
+          const isBottomBoundary = (idx === layers.length - 1);
+          const isZAbsorbing = IS_3D_MODE && IS_VOL_ABSORBING_BND;
 
           for (let i = 1; i < N - 1; i++) {
             const offset = i * N;
@@ -3423,10 +3455,33 @@ void main() {
               let EXTERNAL_COUPLING_TERM = externalCouplingArr[ptr] * DT_FACTOR;
 
               if (IS_3D_MODE) {
-                const U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
-                const U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
-                COUPLING_TERM = K_FACTOR * (U_ABOVE + U_BELOW - 2 * U_CURR);
+                  let U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
+                  let U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
+                  
+                  if (isZAbsorbing) {
+                       if (isTopBoundary) {
+                            const U_NEIGH_CURR = u_above_arr[ptr];
+                            const val_z_abc = U_NEIGH_CURR + murCoeff * (U_NEIGH_CURR - U_CURR);
+                            u_next_arr[ptr] = val_z_abc;
+                            COUPLING_TERM = 0; 
+                            continue;
+                       } else if (isBottomBoundary) {
+                            const U_NEIGH_CURR = u_below_arr[ptr];
+                            const val_z_abc = U_NEIGH_CURR + murCoeff * (U_NEIGH_CURR - U_CURR);
+                            u_next_arr[ptr] = val_z_abc;
+                            COUPLING_TERM = 0; 
+                            continue;
+                       }
+                  } else {
+                      // Fixed Boundary (Hard Wall)
+                      if (isTopBoundary) U_ABOVE = 0;
+                      if (isBottomBoundary) U_BELOW = 0;
+                  }
+                  
+                  COUPLING_TERM = K_FACTOR * (U_ABOVE + U_BELOW - 2 * U_CURR);
+                  
               } else {
+                // 2D mode Z-coupling (if layers are active)
                 const U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
                 const U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
                 COUPLING_TERM =
@@ -3481,30 +3536,39 @@ void main() {
                   D_final * (U_CURR - U_PREV);
               }
 
-              if (VISCOSITY > 0) val -= (val - U_CURR) * DT_factor_viscosity;
+              // --- OLD Viscosity REMOVED HERE ---
+              // if (VISCOSITY > 0) val -= (val - U_CURR) * DT_factor_viscosity;
+              
               val = Math.max(-10.0, Math.min(10.0, val));
               u_next_arr[ptr] = val;
               max_wave_abs = Math.max(max_wave_abs, Math.abs(val));
             }
           }
 
-          // Boundary conditions
-          if (effBnd === "ABSORBING") {
-            const S = Math.sqrt(finalC) * DT_FACTOR;
-            const murCoeff = (S - 1.0) / (S + 1.0);
+          // Apply GLOBAL Damping/Viscosity (Multiplicative Decay)
+          for (let k = 0; k < N * N; k++) {
+              u_next_arr[k] *= GLOBAL_VISCOSITY_FACTOR;
+          }
 
+          // Boundary conditions for XY-plane (2D boundaries)
+          const effC2D = IS_3D_MODE ? BASE_LAYER_CFG.C : l.C;
+          const S_2D = Math.sqrt(effC2D) * DT_FACTOR;
+          const murCoeff2D = (S_2D - 1.0) / (S_2D + 1.0);
+          
+          if (effBnd === "ABSORBING" || (IS_3D_MODE && IS_VOL_ABSORBING_BND)) {
+            // Absorbing Boundary Condition for XY plane (Mur's ABC for every slice)
             for (let k = 1; k < N - 1; k++) {
               let ptrTop = k;
               let ptrTopNeigh = ptrTop + N;
               u_next_arr[ptrTop] =
                 u_current_arr[ptrTopNeigh] +
-                murCoeff * (u_next_arr[ptrTopNeigh] - u_current_arr[ptrTop]);
+                murCoeff2D * (u_next_arr[ptrTopNeigh] - u_current_arr[ptrTop]);
 
               let ptrBot = (N - 1) * N + k;
               let ptrBotNeigh = ptrBot - N;
               u_next_arr[ptrBot] =
                 u_current_arr[ptrBotNeigh] +
-                murCoeff * (u_next_arr[ptrBotNeigh] - u_current_arr[ptrBot]);
+                murCoeff2D * (u_next_arr[ptrBotNeigh] - u_current_arr[ptrBot]);
             }
 
             for (let k = 1; k < N - 1; k++) {
@@ -3512,15 +3576,17 @@ void main() {
               let ptrLeftNeigh = ptrLeft + 1;
               u_next_arr[ptrLeft] =
                 u_current_arr[ptrLeftNeigh] +
-                murCoeff * (u_next_arr[ptrLeftNeigh] - u_current_arr[ptrLeft]);
+                murCoeff2D * (u_next_arr[ptrLeftNeigh] - u_current_arr[ptrLeft]);
 
               let ptrRight = k * N + N - 1;
               let ptrRightNeigh = ptrRight - 1;
               u_next_arr[ptrRight] =
                 u_current_arr[ptrRightNeigh] +
-                murCoeff *
+                murCoeff2D *
                   (u_next_arr[ptrRightNeigh] - u_current_arr[ptrRight]);
             }
+            
+            // Corners (Simplified averaging of neighbors)
             u_next_arr[0] = (u_next_arr[1] + u_next_arr[N]) * 0.5;
             u_next_arr[N - 1] =
               (u_next_arr[N - 2] + u_next_arr[2 * N - 1]) * 0.5;
@@ -3528,8 +3594,9 @@ void main() {
               (u_next_arr[(N - 1) * N + 1] + u_next_arr[(N - 2) * N]) * 0.5;
             u_next_arr[N * N - 1] =
               (u_next_arr[N * N - 2] + u_next_arr[(N - 1) * N - 1]) * 0.5;
+
           } else {
-            // Fixed Boundary Condition
+            // Fixed Boundary Condition for XY plane (Hard Wall)
             for (let k = 0; k < N; k++) {
               u_next_arr[k] = 0;
               u_next_arr[(N - 1) * N + k] = 0;
@@ -5799,6 +5866,13 @@ function initData(keepGlobalDen = false) {
           };
           IS_ALPHA_MODULATION = cbModAlpha.checked;
         }
+const cbVolAbsorb = $("cb-vol-absorb");
+    if (cbVolAbsorb) {
+        cbVolAbsorb.onchange = (e) => {
+            IS_VOL_ABSORBING_BND = e.target.checked;
+        };
+        cbVolAbsorb.checked = IS_VOL_ABSORBING_BND; 
+    }
         const iPsz = $("i-psz");
         const lPsz = $("l-psz");
         if (iPsz && lPsz) {
