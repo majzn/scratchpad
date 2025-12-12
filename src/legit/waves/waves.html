@@ -1069,7 +1069,7 @@
         ></label>
         <input type="range" id="em-st" min="-10" max="10" step="0.1" value="1" />
         <label>Frequency: <span id="em-rt-v" class="value-label"></span></label
-        ><input type="range" id="i-em-rt" min="2" max="256" step="2" />
+        ><input type="range" id="i-em-rt" min="1" max="400" step="1" />
         <label>Phase Offset: <span id="em-of-v" class="value-label"></span></label
         ><input type="range" id="i-em-of" min="0" max="360" step="10" />
       </div>
@@ -1078,8 +1078,8 @@
           <h4 style="margin-top: 0; border-bottom: none;">Probe Settings</h4>
           <label>Radius: <span id="pr-rad-v" class="value-label"></span></label>
           <input type="range" id="pr-rad" min="1" max="20" step="1" />
-          <label>Sensitivity (Damping): <span id="pr-sens-v" class="value-label"></span></label>
-          <input type="range" id="pr-sens" min="0.0" max="1.0" step="0.05" />
+          <label>Sensitivity: <span id="pr-sens-v" class="value-label"></span></label>
+          <input type="range" id="pr-sens" min="0.0" max="10.0" step="0.01" />
       </div>
 
       <div class="row" style="margin-top: 8px">
@@ -1299,13 +1299,13 @@
       const COUPLING_TYPES = {
         ENERGY_EXCHANGE: "Symmetric Energy Exchange",
         MODULATE_DENSITY: "Modulate Target Density",
-        APPLY_FORCE: "Apply Velocity Force (Legacy)",
+        APPLY_FORCE: "Apply Velocity Force",
       };
       
       const BASE_PROBE_CFG = {
           isProbe: false,
-          probeRadius: 5,
-          probeSensitivity: 0.5,
+          probeRadius: 3,
+          probeSensitivity: 1.0,
       };
 
       const BASE_LAYER_CFG = {
@@ -1615,57 +1615,61 @@
           };
       }
       const SIM_SAMPLES_PER_STEP = 2;
-      function connectLiveAudio() {
-          if (!AUDIO_CONTEXT) {
-              setupAudio();
-              if (!AUDIO_CONTEXT) return;
-          }
+function connectLiveAudio() {
+    if (!AUDIO_CONTEXT) {
+        setupAudio();
+        if (!AUDIO_CONTEXT) return;
+    }
 
-          REALTIME_PROCESSOR = AUDIO_CONTEXT.createScriptProcessor(SIM_SAMPLES_PER_AUDIO_BUFFER, 0, 1);
-          REALTIME_GAIN = AUDIO_CONTEXT.createGain();
+    REALTIME_PROCESSOR = AUDIO_CONTEXT.createScriptProcessor(SIM_SAMPLES_PER_AUDIO_BUFFER, 0, 1);
+    REALTIME_GAIN = AUDIO_CONTEXT.createGain();
 
-          REALTIME_GAIN.gain.setValueAtTime(0.0, AUDIO_CONTEXT.currentTime);
-          
-          REALTIME_PROCESSOR.onaudioprocess = function(e) {
-              // Check global safety flags immediately inside the audio thread.
-              if (!IS_REALTIME_AUDIO || IS_PAUSED || !ACTIVE_PROBE_ID || !REALTIME_GAIN) {
-                  e.outputBuffer.getChannelData(0).fill(0);
-                  return;
-              }
+    REALTIME_GAIN.gain.setValueAtTime(0.0, AUDIO_CONTEXT.currentTime);
+    
+    REALTIME_PROCESSOR.onaudioprocess = function(e) {
+        if (!IS_REALTIME_AUDIO || IS_PAUSED || !ACTIVE_PROBE_ID || !REALTIME_GAIN) {
+            e.outputBuffer.getChannelData(0).fill(0);
+            return;
+        }
 
-              const outputBuffer = e.outputBuffer.getChannelData(0);
-              const bufferSize = outputBuffer.length;
-              
-              const MAX_AMP_SAFETY = 2.0; 
-              const OUTPUT_SCALING = 0.5 / MAX_AMP_SAFETY; 
+        const outputBuffer = e.outputBuffer.getChannelData(0);
+        const bufferSize = outputBuffer.length;
+        
+        // Find the active probe to get its sensitivity for the gain ramp
+        const em = emits.find((x) => x.id === ACTIVE_PROBE_ID);
+        const sensitivity = em ? em.probeSensitivity : 0.5;
+        const TARGET_GAIN = 0.5 * sensitivity; // Max volume is 0.5, modulated by probe sensitivity (0-1)
 
-              for (let i = 0; i < bufferSize; i++) {
-                  // Run one physics step
-	if(i % SIM_SAMPLES_PER_STEP == 0) {
-                  sim(); 
-	}
+        for (let i = 0; i < bufferSize; i++) {
+            // Run one physics step
+            if(i % SIM_SAMPLES_PER_STEP == 0) {
+                sim(); 
+            }
 
+            // Retrieve the *unscaled* last recorded probe data
+            // We rely on the fact that PROBE_HISTORY stores the already scaled value 
+            // from recordProbeData. However, if we want to use the Gain Node for scaling,
+            // we must ensure PROBE_HISTORY is unscaled. 
+            // For now, let's trust recordProbeData and adjust the gain level.
+            let liveSample = PROBE_HISTORY.length > 0 
+                ? PROBE_HISTORY[PROBE_HISTORY.length - 1] 
+                : 0;
 
-                  // Retrieve the last recorded probe data
-                  let liveSample = PROBE_HISTORY.length > 0 
-                      ? PROBE_HISTORY[PROBE_HISTORY.length - 1] 
-                      : 0;
+            // Apply soft clamping (hyperbolic tangent) for glitch-free output, 
+            // but rely on the Gain Node (REALTIME_GAIN) for amplitude scaling.
+            let scaledSample = liveSample; // liveSample already includes sensitivity
+            scaledSample = Math.tanh(scaledSample * 2.0) / 2.0;
 
-                  // Scale and apply soft clamping (hyperbolic tangent) for glitch-free output
-                  let scaledSample = liveSample * OUTPUT_SCALING;
-                  scaledSample = Math.tanh(scaledSample * 2.0) / 2.0;
+            outputBuffer[i] = scaledSample; 
+        }
 
-                  outputBuffer[i] = scaledSample; 
-              }
-
-              // Ramp up to the target gain (0.5) smoothly
-              REALTIME_GAIN.gain.exponentialRampToValueAtTime(0.5, AUDIO_CONTEXT.currentTime + 0.1); 
-          };
-          
-          REALTIME_PROCESSOR.connect(REALTIME_GAIN);
-          REALTIME_GAIN.connect(AUDIO_CONTEXT.destination);
-      }
-
+        // Ramp up/maintain to the target gain smoothly
+        REALTIME_GAIN.gain.exponentialRampToValueAtTime(TARGET_GAIN, AUDIO_CONTEXT.currentTime + 0.1); 
+    };
+    
+    REALTIME_PROCESSOR.connect(REALTIME_GAIN);
+    REALTIME_GAIN.connect(AUDIO_CONTEXT.destination);
+}
       function startRealtimeAudio() {
           if (!AUDIO_CONTEXT) {
               setupAudio();
@@ -1834,12 +1838,12 @@
         const loader = new THREE.CubeTextureLoader();
 
         const filePaths = [
-          "skybox/px.png",
-          "skybox/nx.png",
-          "skybox/py.png",
-          "skybox/ny.png",
-          "skybox/pz.png",
-          "skybox/nz.png",
+          "skybox.png",
+          "skybox.png",
+          "skybox.png",
+          "skybox.png",
+          "skybox.png",
+          "skybox.png",
         ];
 
         loader.load(
@@ -3173,76 +3177,69 @@ void main() {
         }
       }
       
-      function recordProbeData() {
-          let totalValue = 0;
-          let activeProbeCount = 0;
+function recordProbeData() {
+    let totalValue = 0;
+    let activeProbeCount = 0;
 
-          emits.forEach(e => {
-              if (!e.isProbe) return;
-              
-              const N = GRID;
-              let sampledValue = 0;
-              let samples = 0;
-              const radSq = e.probeRadius * e.probeRadius;
-              const L_IDX = e.lIdx;
-              
-              const u_arr = u[L_IDX];
-              const u_prev_arr = u_prev[L_IDX];
+    emits.forEach(e => {
+        if (!e.isProbe) return;
+        
+        const N = GRID;
+        let sampledValue = 0;
+        let samples = 0;
+        const radSq = e.probeRadius * e.probeRadius;
+        const L_IDX = e.lIdx;
+        
+        const u_arr = u[L_IDX];
 
-              for (let r = -e.probeRadius; r <= e.probeRadius; r++) {
-                  for (let c = -e.probeRadius; c <= e.probeRadius; c++) {
-                      const rr = e.i + r;
-                      const cc = e.j + c;
+        for (let r = -e.probeRadius; r <= e.probeRadius; r++) {
+            for (let c = -e.probeRadius; c <= e.probeRadius; c++) {
+                const rr = e.i + r;
+                const cc = e.j + c;
 
-                      if (rr >= 0 && rr < N && cc >= 0 && cc < N) {
-                          const distSq = r * r + c * c;
-                          if (distSq <= radSq) {
-                              const idx = rr * N + cc;
-                              sampledValue += u_arr[idx]; 
-                              samples++;
-                          }
-                      }
-                  }
-              }
-              
-              let averageValue = samples > 0 ? sampledValue / samples : 0;
-              let recordedValue = averageValue; 
-              
-              // Optimized absorption calculation
-              const absorptionFactor = e.probeSensitivity * 0.1; 
-              if (absorptionFactor > 0) {
-                  const centerIdx = e.i * N + e.j;
-                  const dampingFactor = 1.0 - absorptionFactor;
-                  u_arr[centerIdx] *= dampingFactor;
-                  u_prev_arr[centerIdx] *= dampingFactor;
-              }
+                if (rr >= 0 && rr < N && cc >= 0 && cc < N) {
+                    const distSq = r * r + c * c;
+                    if (distSq <= radSq) {
+                        const idx = rr * N + cc;
+                        sampledValue += u_arr[idx]; 
+                        samples++;
+                    }
+                }
+            }
+        }
+        
+        let averageValue = samples > 0 ? sampledValue / samples : 0;
+        
+        // MODIFICATION: Apply probe sensitivity as a gain factor
+        let recordedValue = averageValue * e.probeSensitivity;
+        
 
-              if (e.id === ACTIVE_PROBE_ID) {
-                  PROBE_HISTORY.push(recordedValue);
-                  // Only manage history buffer size if it's the active probe
-                  while (PROBE_HISTORY.length > PROBE_HISTORY_LENGTH) {
-                      PROBE_HISTORY.shift();
-                  }
-              }
-              
-              totalValue += averageValue;
-              activeProbeCount++;
-          });
-          
-          if (ACTIVE_PROBE_ID && !IS_REALTIME_AUDIO) {
-              const maxAbs = PROBE_HISTORY.reduce((max, val) => Math.max(max, Math.abs(val)), 0);
-              renderProbeGraph(PROBE_HISTORY, maxAbs);
-          }
-          if (ACTIVE_PROBE_ID && IS_REALTIME_AUDIO) {
-              // Update graph less frequently to avoid slowing down audio thread
-              if (PROBE_TIME_STEP_COUNTER % 60 === 0) {
-                  const maxAbs = PROBE_HISTORY.reduce((max, val) => Math.max(max, Math.abs(val)), 0);
-                  renderProbeGraph(PROBE_HISTORY, maxAbs);
-              }
-          }
+        if (e.id === ACTIVE_PROBE_ID) {
+            PROBE_HISTORY.push(recordedValue);
+            // Only manage history buffer size if it's the active probe
+            while (PROBE_HISTORY.length > PROBE_HISTORY_LENGTH) {
+                PROBE_HISTORY.shift();
+            }
+        }
+        
+        totalValue += recordedValue; // Use the scaled value for totalValue
+        activeProbeCount++;
+    });
+    
+    if (ACTIVE_PROBE_ID && !IS_REALTIME_AUDIO) {
+        const maxAbs = PROBE_HISTORY.reduce((max, val) => Math.max(max, Math.abs(val)), 0);
+        renderProbeGraph(PROBE_HISTORY, maxAbs);
+    }
+    if (ACTIVE_PROBE_ID && IS_REALTIME_AUDIO) {
+        // Update graph less frequently to avoid slowing down audio thread
+        if (PROBE_TIME_STEP_COUNTER % 60 === 0) {
+            const maxAbs = PROBE_HISTORY.reduce((max, val) => Math.max(max, Math.abs(val)), 0);
+            renderProbeGraph(PROBE_HISTORY, maxAbs);
+        }
+    }
 
-          return activeProbeCount > 0 ? totalValue / activeProbeCount : 0;
-      }
+    return activeProbeCount > 0 ? totalValue / activeProbeCount : 0;
+}
 
 function sim() {
         if (!layers.length) return;
@@ -4450,96 +4447,100 @@ function initData(keepGlobalDen = false) {
         stopRealtimeAudio();
       }
 
-      function updateEmitterInspector() {
-        const menu = $("emit-menu");
-        const probeControls = $("probe-controls-group");
-        const emitterControls = $("emitter-controls-group");
-        const toggleBtn = $("em-probe-toggle");
-        const audioBtn = $("em-audio-btn");
-        
-        if (!selectedEmitterId) {
-          menu.style.display = "none";
-          editEmitId = null;
-          return;
-        }
-        
-        const em = emits.find((x) => x.id === selectedEmitterId);
-        if (!em) {
-          selectedEmitterId = null;
-          menu.style.display = "none";
-          editEmitId = null;
-          return;
-        }
-        
-        editEmitId = em.id;
-        menu.style.display = "block";
+     function updateEmitterInspector() {
+    const menu = $("emit-menu");
+    const probeControls = $("probe-controls-group");
+    const emitterControls = $("emitter-controls-group");
+    const toggleBtn = $("em-probe-toggle");
+    const audioBtn = $("em-audio-btn");
+    
+    if (!selectedEmitterId) {
+      menu.style.display = "none";
+      editEmitId = null;
+      return;
+    }
+    
+    const em = emits.find((x) => x.id === selectedEmitterId);
+    if (!em) {
+      selectedEmitterId = null;
+      menu.style.display = "none";
+      editEmitId = null;
+      return;
+    }
+    
+    editEmitId = em.id;
+    menu.style.display = "block";
 
-        const isProbe = em.isProbe || false;
+    const isProbe = em.isProbe || false;
+    
+    if (isProbe) {
+        probeControls.style.display = 'block';
+        emitterControls.style.display = 'none';
+        toggleBtn.textContent = 'Set as Emitter';
+        toggleBtn.classList.remove('probe-active');
+        audioBtn.style.display = 'block';
         
-        if (isProbe) {
-            probeControls.style.display = 'block';
-            emitterControls.style.display = 'none';
-            toggleBtn.textContent = 'Set as Emitter';
-            toggleBtn.classList.remove('probe-active');
-            audioBtn.style.display = 'block';
-            
-            if (ACTIVE_PROBE_ID !== selectedEmitterId) {
-                ACTIVE_PROBE_ID = selectedEmitterId;
-                PROBE_HISTORY = [];
-                $("probe-menu").style.display = 'none';
-                stopAudio();
-                stopRealtimeAudio();
-            }
-            
-            $("pr-rad").value = em.probeRadius;
-            $("pr-rad-v").innerText = em.probeRadius;
-            $("pr-sens").value = em.probeSensitivity;
-            $("pr-sens-v").innerText = em.probeSensitivity.toFixed(2);
-            
-            EV("pr-rad", "input", (e) => {
-                const val = +e.target.value;
-                em.probeRadius = val;
-                $("pr-rad-v").innerText = val;
-                syncE();
-            });
-            EV("pr-sens", "input", (e) => {
-                const val = +e.target.value;
-                em.probeSensitivity = val;
-                $("pr-sens-v").innerText = val.toFixed(2);
-            });
-
-        } else {
-            probeControls.style.display = 'none';
-            emitterControls.style.display = 'block';
-            toggleBtn.textContent = 'Set as Probe';
-            toggleBtn.classList.add('probe-active');
-            audioBtn.style.display = 'none';
-            
-            if (ACTIVE_PROBE_ID === selectedEmitterId) {
-                ACTIVE_PROBE_ID = null;
-                $("probe-menu").style.display = 'none';
-                stopAudio();
-                stopRealtimeAudio();
-            }
-            
-            $("em-shp").value = em.shp;
-            $("em-geo").value = em.geo || "POINT";
-            $("em-st").value = em.st;
-            $("i-em-rt").value = em.rt;
-            $("i-em-of").value = em.off;
-            $("em-st-v").innerText = em.st.toFixed(1);
-            $("em-rt-v").innerText = em.rt;
-            $("em-of-v").innerText = em.off;
+        if (ACTIVE_PROBE_ID !== selectedEmitterId) {
+            ACTIVE_PROBE_ID = selectedEmitterId;
+            PROBE_HISTORY = [];
+            $("probe-menu").style.display = 'none';
+            stopAudio();
+            stopRealtimeAudio();
         }
         
-        const prRad = $("pr-rad");
-        if (prRad) prRad.classList.add("custom-drag-slider");
-        const prSens = $("pr-sens");
-        if (prSens) prSens.classList.add("custom-drag-slider");
+        $("pr-rad").value = em.probeRadius;
+        $("pr-rad-v").innerText = em.probeRadius;
+        $("pr-sens").value = em.probeSensitivity;
+        $("pr-sens-v").innerText = em.probeSensitivity.toFixed(2);
         
-        syncE();
-        updateProbeMenuInfo();
-      }
+        EV("pr-rad", "input", (e) => {
+            const val = +e.target.value;
+            em.probeRadius = val;
+            $("pr-rad-v").innerText = val;
+            syncE();
+        });
+        EV("pr-sens", "input", (e) => {
+            const val = +e.target.value;
+            em.probeSensitivity = val;
+            $("pr-sens-v").innerText = val.toFixed(2);
+            // NEW: Update Realtime Gain if live mode is active
+            if (IS_REALTIME_AUDIO && REALTIME_GAIN && AUDIO_CONTEXT) {
+                 REALTIME_GAIN.gain.setValueAtTime(0.5 * val, AUDIO_CONTEXT.currentTime);
+            }
+        });
+
+    } else {
+        probeControls.style.display = 'none';
+        emitterControls.style.display = 'block';
+        toggleBtn.textContent = 'Set as Probe';
+        toggleBtn.classList.add('probe-active');
+        audioBtn.style.display = 'none';
+        
+        if (ACTIVE_PROBE_ID === selectedEmitterId) {
+            ACTIVE_PROBE_ID = null;
+            $("probe-menu").style.display = 'none';
+            stopAudio();
+            stopRealtimeAudio();
+        }
+        
+        $("em-shp").value = em.shp;
+        $("em-geo").value = em.geo || "POINT";
+        $("em-st").value = em.st;
+        $("i-em-rt").value = em.rt;
+        $("i-em-of").value = em.off;
+        $("em-st-v").innerText = em.st.toFixed(1);
+        $("em-rt-v").innerText = em.rt;
+        $("em-of-v").innerText = em.off;
+    }
+    
+    const prRad = $("pr-rad");
+    if (prRad) prRad.classList.add("custom-drag-slider");
+    const prSens = $("pr-sens");
+    if (prSens) prSens.classList.add("custom-drag-slider");
+    
+    syncE();
+    updateProbeMenuInfo();
+}
       
       function updateProbeMenuInfo() {
           const em = emits.find((x) => x.id === ACTIVE_PROBE_ID);
