@@ -2437,7 +2437,8 @@ void main() {
         u_prev.push(new Float32Array(GRID * GRID));
         u_aux.push(new Float32Array(GRID * GRID));
         den.push(new Float32Array(GRID * GRID));
-        syncM();
+        layerDensityModulations.push(new Float32Array(GRID * GRID));
+				syncM();
         updateLayerListUI();
         restoreExpansionState(expansionState);
         renderCouplingMatrixUI();
@@ -2452,7 +2453,7 @@ void main() {
         u_prev.pop();
         den.pop();
         u_aux.pop();
-
+				layerDensityModulations.pop();
         GLOBAL_COUPLING_LINKS = GLOBAL_COUPLING_LINKS.filter(
           (link) =>
             link.sourceIdx !== idxToRemove && link.targetIdx !== idxToRemove,
@@ -2857,11 +2858,13 @@ void main() {
           : source.gradientStops;
 
         var cols = [];
+				var gradientFloats = new Float32Array(MAX_GRADIENT_STOPS * 3);
         for (let j = 0; j < MAX_GRADIENT_STOPS; j++) {
-          let c = stops[Math.min(j, stops.length - 1)];
-          cols.push(new THREE.Color(c[0] / 255, c[1] / 255, c[2] / 255));
-        }
-
+          let c_rgb = stops[Math.min(j, stops.length - 1)];
+          gradientFloats[j * 3 + 0] = c_rgb[0] / 255.0;
+          gradientFloats[j * 3 + 1] = c_rgb[1] / 255.0;
+          gradientFloats[j * 3 + 2] = c_rgb[2] / 255.0;
+				}
         return {
           SUN_DIR: { value: sunDir },
           LIGHT_INTENSITY: { value: lInt },
@@ -2879,7 +2882,7 @@ void main() {
               ? source.volGradientContrast
               : source.gradientContrast,
           },
-          GRADIENT_STOPS: { value: uniformsArray(cols) },
+          GRADIENT_STOPS: { value: gradientFloats },
           GRADIENT_STOPS_COUNT: { value: stops.length },
           VIS_MIN: { value: visMin },
           VIS_MAX: { value: visMax },
@@ -4036,9 +4039,7 @@ function resizeSim(newGrid) {
             gradientStops: l.gradientStops.map((arr) => [...arr]),
 
             volShadingMode: BASE_LAYER_CFG.volShadingMode,
-            volGradientStops: BASE_LAYER_CFG.volGradientStops.map((arr) => [
-              ...arr,
-            ]),
+            volGradientStops: BASE_LAYER_CFG.volGradientStops.map((arr) => [...arr]),
             volGradientBias: BASE_LAYER_CFG.volGradientBias,
             volGradientContrast: BASE_LAYER_CFG.volGradientContrast,
             pointFalloff: BASE_LAYER_CFG.pointFalloff,
