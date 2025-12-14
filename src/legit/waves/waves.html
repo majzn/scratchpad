@@ -1210,6 +1210,11 @@
       var IMPULSE_WAVE_TYPE = "CONSTANT";
       var IMPULSE_WAVELENGTH = 20;
 
+			var layerCouplingContributions = []; 
+			var layerDensityModulations = [];
+			var meshes = [];
+
+
       var dragStartGridCoords = { i: 0, j: 0, i2: 0, j2: 0 };
       var isContinuousBrushActive = false;
       var pulseStartTime = 0;
@@ -2428,49 +2433,53 @@ void main() {
         };
       }
 
-      function addLayer() {
-        const expansionState = getExpansionState();
-        if (layers.length >= (IS_3D_MODE ? 100 : 8)) return;
-        var newId = layerCounter++;
-        layers.push(defL(newId));
-        u.push(new Float32Array(GRID * GRID));
-        u_prev.push(new Float32Array(GRID * GRID));
-        u_aux.push(new Float32Array(GRID * GRID));
-        den.push(new Float32Array(GRID * GRID));
-        layerDensityModulations.push(new Float32Array(GRID * GRID));
-				syncM();
-        updateLayerListUI();
-        restoreExpansionState(expansionState);
-        renderCouplingMatrixUI();
-      }
-      function removeLayer() {
-        const expansionState = getExpansionState();
-        if (layers.length <= 1) return;
-        var idxToRemove = layers.length - 1;
-        emits = emits.filter((e) => e.lIdx !== idxToRemove);
-        layers.pop();
-        u.pop();
-        u_prev.pop();
-        den.pop();
-        u_aux.pop();
-				layerDensityModulations.pop();
-        GLOBAL_COUPLING_LINKS = GLOBAL_COUPLING_LINKS.filter(
-          (link) =>
-            link.sourceIdx !== idxToRemove && link.targetIdx !== idxToRemove,
-        ).map((link) => ({
-          ...link,
-          sourceIdx:
-            link.sourceIdx > idxToRemove ? link.sourceIdx - 1 : link.sourceIdx,
-          targetIdx:
-            link.targetIdx > idxToRemove ? link.targetIdx - 1 : link.targetIdx,
-        }));
+function addLayer() {
+    const expansionState = getExpansionState();
+    if (layers.length >= (IS_3D_MODE ? 100 : 8)) return;
+    var newId = layerCounter++;
+    layers.push(defL(newId));
+    u.push(new Float32Array(GRID * GRID));
+    u_prev.push(new Float32Array(GRID * GRID));
+    u_aux.push(new Float32Array(GRID * GRID));
+    den.push(new Float32Array(GRID * GRID));
+    layerDensityModulations.push(new Float32Array(GRID * GRID));
+    layerCouplingContributions.push(new Float32Array(GRID * GRID));
+    syncM();
+    updateLayerListUI();
+    restoreExpansionState(expansionState);
+    renderCouplingMatrixUI();
+}
+function removeLayer() {
+    const expansionState = getExpansionState();
+    if (layers.length <= 1) return;
+    var idxToRemove = layers.length - 1;
+    emits = emits.filter((e) => e.lIdx !== idxToRemove);
+    layers.pop();
+    u.pop();
+    u_prev.pop();
+    den.pop();
+    u_aux.pop();
+    layerDensityModulations.pop();
+    layerCouplingContributions.pop();
 
-        syncM();
-        syncE();
-        updateLayerListUI();
-        restoreExpansionState(expansionState);
-        renderCouplingMatrixUI();
-      }
+    GLOBAL_COUPLING_LINKS = GLOBAL_COUPLING_LINKS.filter(
+        (link) =>
+            link.sourceIdx !== idxToRemove && link.targetIdx !== idxToRemove,
+    ).map((link) => ({
+        ...link,
+        sourceIdx:
+            link.sourceIdx > idxToRemove ? link.sourceIdx - 1 : link.sourceIdx,
+        targetIdx:
+            link.targetIdx > idxToRemove ? link.targetIdx - 1 : link.targetIdx,
+    }));
+
+    syncM();
+    syncE();
+    updateLayerListUI();
+    restoreExpansionState(expansionState);
+    renderCouplingMatrixUI();
+}
+
 
       function resetDensity() {
         den.forEach((d) => d.fill(0));
@@ -2851,7 +2860,7 @@ void main() {
         ].indexOf(shadingMode);
       }
 
-      function createBaseUniforms(layer, vizCfg, volOpacity) {
+function createBaseUniforms(layer, vizCfg, volOpacity) {
         const source = IS_3D_MODE ? vizCfg : layer;
         const stops = IS_3D_MODE
           ? source.volGradientStops
@@ -2860,7 +2869,10 @@ void main() {
         var cols = [];
 				var gradientFloats = new Float32Array(MAX_GRADIENT_STOPS * 3);
         for (let j = 0; j < MAX_GRADIENT_STOPS; j++) {
-          let c_rgb = stops[Math.min(j, stops.length - 1)];
+					let c_rgb_raw = stops[Math.min(j, stops.length - 1)]; 
+    			let c_rgb = (Array.isArray(c_rgb_raw) && c_rgb_raw.length === 3) 
+        ? c_rgb_raw 
+        : [0, 0, 0];
           gradientFloats[j * 3 + 0] = c_rgb[0] / 255.0;
           gradientFloats[j * 3 + 1] = c_rgb[1] / 255.0;
           gradientFloats[j * 3 + 2] = c_rgb[2] / 255.0;
@@ -3253,7 +3265,6 @@ function sim() {
         var DT2 = DT_FACTOR * DT_FACTOR;
         var max_wave_abs = 0.0;
         
-        // NEW: Map user 0.0-1.0 to internal damping factor
         const USER_VISCOSITY_FACTOR = parseFloat($("i-vis").value);
         const MIN_DAMPING_FACTOR = 0.90; 
         const DAMPING_RANGE = 1.0 - MIN_DAMPING_FACTOR; 
@@ -3302,8 +3313,11 @@ function sim() {
             }
           }
         });
-
-        var volK = 0.0;
+				
+		layerCouplingContributions.forEach(arr => arr.fill(0));
+    	layerDensityModulations.forEach(arr => arr.fill(0));
+        
+		var volK = 0.0;
         var effC = BASE_LAYER_CFG.C;
         var effD = BASE_LAYER_CFG.D;
 
@@ -3313,9 +3327,8 @@ function sim() {
           volK = BASE_LAYER_CFG.K;
         }
 
-        const layerCouplingContributions = layers.map(() => new Float32Array(N * N));
-        const layerDensityModulations = layers.map(() => new Float32Array(N * N));
-
+        // REMOVED: const layerCouplingContributions = layers.map(() => new Float32Array(N * N));
+        // REMOVED: const layerDensityModulations = layers.map(() => new Float32Array(N * N));
 
         const DT_factor_viscosity = DT_FACTOR * VISCOSITY;
         const K_FACTOR = IS_3D_MODE ? volK * DT_FACTOR : DT_FACTOR;
@@ -3433,33 +3446,28 @@ function sim() {
               let COUPLING_TERM = 0; 
 
               if (isIsotropic) {
-                  // If isotropic, we calculate the full 3D Laplacian.
                   
                   if (isZAbsorbing && (isTopBoundary || isBottomBoundary)) {
-                       // If it's a boundary and absorbing, skip the Z-Laplacian 
-                       // and calculate the Z-ABC boundary update value directly.
                        const U_NEIGH_CURR = isTopBoundary ? u_above_arr[ptr] : u_below_arr[ptr];
                        const val_z_abc = U_NEIGH_CURR + murCoeff * (U_NEIGH_CURR - U_CURR);
                        u_next_arr[ptr] = val_z_abc;
                        continue;
                   }
                   
-                  // For all other points (interior or fixed-boundary): include the Z-Laplacian
                   let U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
                   let U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
                   
                   if (!isZAbsorbing) {
-                      // Fixed boundary: Hard wall reflection 
                       if (isTopBoundary) U_ABOVE = U_CURR;
                       if (isBottomBoundary) U_BELOW = U_CURR;
                   }
                   
                   lap += U_ABOVE + U_BELOW;
-                  lap -= 6 * U_CURR; // Full 3D Laplacian (6 neighbors - 6 * center)
+                  lap -= 6 * U_CURR;
                   
               } else if (IS_3D_MODE) {
-                  // Anisotropic or Fixed K: Use 2D Laplacian + K-Coupling
-                  lap -= 4 * U_CURR; // 2D Laplacian (4 neighbors - 4 * center)
+                  
+                  lap -= 4 * U_CURR;
                   
                   let U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
                   let U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
@@ -3471,15 +3479,12 @@ function sim() {
                   
                   COUPLING_TERM = K_FACTOR * (U_ABOVE + U_BELOW - 2 * U_CURR);
               } else {
-                // 2D mode (Layers)
                 lap -= 4 * U_CURR;
                 const U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
                 const U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
                 COUPLING_TERM =
                   K_FACTOR * (K_BELOW * (U_BELOW - U_CURR) + K_CURR * (U_ABOVE - U_CURR));
               }
-
-              // End of Laplacian/Coupling Logic
 
               const C_density = effectiveDensity > 0 ? finalC * (1 - effectiveDensity) : finalC;
 
@@ -3499,8 +3504,6 @@ function sim() {
 
               let val;
               
-              // ... (Formula evaluation is the same) ...
-              
               if (formulaFn) {
                 const scope = {
                   U_CURR: U_CURR,
@@ -3516,8 +3519,6 @@ function sim() {
                 };
                 val = formulaFn.call({ vars: scope });
               } else if (l.formulaKey === "WAVE") {
-                // IMPORTANT: For isotropic 3D, COUPLING_TERM is 0, lap is 3D Laplacian.
-                // For anisotropic 3D, COUPLING_TERM is Z-coupling, lap is 2D Laplacian.
                 val =
                   2 * U_CURR -
                   U_PREV +
@@ -3555,18 +3556,15 @@ function sim() {
             }
           }
 
-          // Apply GLOBAL Damping/Viscosity (Multiplicative Decay)
           for (let k = 0; k < N * N; k++) {
               u_next_arr[k] *= GLOBAL_VISCOSITY_FACTOR;
           }
 
-          // Boundary conditions for XY-plane (2D boundaries)
           const effC2D = IS_3D_MODE ? BASE_LAYER_CFG.C : l.C;
           const S_2D = Math.sqrt(effC2D) * DT_FACTOR;
           const murCoeff2D = (S_2D - 1.0) / (S_2D + 1.0);
           
           if (effBnd === "ABSORBING" || (IS_3D_MODE && IS_VOL_ABSORBING_BND)) {
-            // Absorbing Boundary Condition for XY plane (Mur's ABC for every slice)
             for (let k = 1; k < N - 1; k++) {
               let ptrTop = k;
               let ptrTopNeigh = ptrTop + N;
@@ -3596,7 +3594,6 @@ function sim() {
                   (u_next_arr[ptrRightNeigh] - u_current_arr[ptrRight]);
             }
             
-            // Corners (Simplified averaging of neighbors)
             u_next_arr[0] = (u_next_arr[1] + u_next_arr[N]) * 0.5;
             u_next_arr[N - 1] =
               (u_next_arr[N - 2] + u_next_arr[2 * N - 1]) * 0.5;
@@ -3606,7 +3603,6 @@ function sim() {
               (u_next_arr[N * N - 2] + u_next_arr[(N - 1) * N - 1]) * 0.5;
 
           } else {
-            // Fixed Boundary Condition for XY plane (Hard Wall)
             for (let k = 0; k < N; k++) {
               u_next_arr[k] = 0;
               u_next_arr[(N - 1) * N + k] = 0;
@@ -4414,7 +4410,6 @@ function resizeSim(newGrid) {
         IS_PAUSED = false;
       }
 
-// Modify the initData function signature and logic
 function initData(keepGlobalDen = false) { 
     GRID = +$("i-res").value;
     u = layers.map(() => new Float32Array(GRID * GRID));
@@ -4424,8 +4419,10 @@ function initData(keepGlobalDen = false) {
     layerDensityModulations = layers.map(
       () => new Float32Array(GRID * GRID),
     );
+    layerCouplingContributions = layers.map(
+      () => new Float32Array(GRID * GRID),
+    );
 
-    // Only create a NEW GLOBAL_DEN array if we are not preserving resampled data
     if (!keepGlobalDen || GLOBAL_DEN.length !== GRID * GRID) { 
       GLOBAL_DEN = new Float32Array(GRID * GRID);
     }
@@ -4955,6 +4952,13 @@ function initData(keepGlobalDen = false) {
           }
 
           container.appendChild(linkDiv);
+const rateSlider = linkDiv.querySelector('.coupling-rate-slider');
+          if (rateSlider) {
+              rateSlider.addEventListener('input', function() {
+                  const index = parseInt(this.dataset.linkIndex);
+                  updateCouplingLink(index, 'rate', parseFloat(this.value));
+              });
+          }
         });
         setupCustomSliderDrag();
       }
