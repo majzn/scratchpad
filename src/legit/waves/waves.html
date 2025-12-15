@@ -16,6 +16,8 @@
         --color-warning: #e5b300;
         --color-danger: #622;
         --color-probe: #e568b2;
+        --color-valve: #00b386;
+        --color-valve-open: #00ffaa;
         --spacing-unit: 4px;
         --border-width: 1px;
         --font-size: 12px;
@@ -187,6 +189,12 @@
         border-color: var(--color-probe);
         color: var(--color-bg-dark);
       }
+      
+      button.valve-active {
+        background: var(--color-valve);
+        border-color: var(--color-valve);
+        color: var(--color-bg-dark);
+      }
 
       .row {
         display: flex;
@@ -263,6 +271,25 @@
       #emit-menu h3 {
         cursor: grab;
         margin-top: 0;
+      }
+      #valve-menu {
+        position: fixed;
+        top: var(--toolbar-height);
+        left: var(--sidebar-width);
+        z-index: 1001;
+        background: var(--color-bg-medium);
+        border: 1px solid var(--color-valve);
+        padding: 8px;
+        width: 260px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        border-radius: 0 0 4px 4px;
+        cursor: grab;
+        display: none;
+      }
+      #valve-menu h3 {
+          color: var(--color-valve);
+          cursor: grab;
+          margin-top: 0;
       }
 
       label {
@@ -369,6 +396,7 @@
       body.cinematic-mode #ctx-menu,
       body.cinematic-mode #sdf-menu,
       body.cinematic-mode #emit-menu,
+      body.cinematic-mode #valve-menu,
       body.cinematic-mode #probe-menu,
       body.cinematic-mode #top-toolbar {
         display: none !important;
@@ -505,6 +533,9 @@
             Impulse
           </button>
           <button id="b-emit" data-brush="EMITTER_PLACE">Emit/Probe</button>
+          <button id="b-valve" data-brush="VALVE_PLACE">
+            Valve/Tone Hole
+          </button>
           <button id="b-den" data-brush="DENSITY_PAINT">Paint</button>
           <button id="b-sdf" data-brush="SDF_PLACE">Stamp</button>
         </div>
@@ -1090,6 +1121,28 @@
       </div>
     </div>
     
+    <div id="valve-menu">
+        <h3>Valve Settings</h3>
+        <div id="valve-controls-group">
+            <label>Activation Key Code</label>
+            <input type="text" id="v-key" value="KeyA" placeholder="Press a key to set..." style="height: auto; padding: 4px; text-align: center;">
+            <label style="margin-top: 8px;">Radius (Grid Units): <span id="v-rad-v" class="value-label"></span></label>
+            <input type="range" id="v-rad" min="1" max="30" step="1" />
+            <label style="margin-top: 8px;">Closed Density (Wall): <span id="v-closed-v" class="value-label"></span></label>
+            <input type="range" id="v-closed" min="0.0" max="1.0" step="0.01" />
+            <label style="margin-top: 8px;">Open Density (Hole): <span id="v-open-v" class="value-label"></span></label>
+            <input type="range" id="v-open" min="0.0" max="1.0" step="0.01" />
+            <label style="margin-top: 8px; color: var(--color-valve-open);">State: <span id="v-state" class="value-label" style="min-width: 60px; color: var(--color-valve-open);">CLOSED</span></label>
+        </div>
+        
+        <div class="row" style="margin-top: 8px">
+            <button id="v-del-btn" style="background: var(--color-danger)">
+              Remove Valve
+            </button>
+            <button id="v-close">Close</button>
+        </div>
+    </div>
+    
     <div id="probe-menu">
         <h3>Probe Signal Analysis</h3>
         <canvas id="probe-graph-canvas" width="400" height="150"></canvas>
@@ -1150,7 +1203,6 @@
         u_prev = [],
         u_aux = [],
         den = [],
-        // IMPORTANT: These must be initialized as arrays of arrays
         layerCouplingContributions = [],
         layerDensityModulations = [],
         meshes = [],
@@ -1158,6 +1210,7 @@
         obsMeshes = [];
       var emits = [],
         shapes = [],
+        VALVES = [], 
         brush = "DISTURBANCE";
       var mRad = 10,
         mVal = 0.5,
@@ -1173,6 +1226,7 @@
         phi = 60;
       var sdfCoords = null,
         editEmitId = null,
+        editValveId = null,
         actEmitPart = "BODY";
       var TGT = new THREE.Vector3(0, 0, 0);
       var brushHnd = 0.0;
@@ -1201,8 +1255,8 @@
       var IS_REALTIME_AUDIO = false;
       var REALTIME_PROCESSOR = null; 
       var REALTIME_GAIN = null;
-      var SIM_SAMPLES_PER_AUDIO_BUFFER = 4096;
-      var SIM_STEPS_PER_FRAME = 1; 
+      var SIM_SAMPLES_PER_AUDIO_BUFFER = 512;
+      var SIM_STEPS_PER_FRAME = 2;
 
       var IMPULSE_MAGNITUDE = 5.0;
       var IS_IMPULSE_HOLD = false;
@@ -1312,6 +1366,18 @@
           probeRadius: 3,
           probeSensitivity: 1.0,
       };
+      
+      const BASE_VALVE_CFG = {
+          id: 0,
+          i: 40,
+          j: 40,
+          lIdx: 0,
+          radius: 10,
+          key: "KeyA",
+          openDensity: 0.0,
+          closedDensity: 1.0,
+          isKeyPressed: false,
+      };
 
       const BASE_LAYER_CFG = {
         C: FORMULA_PRESETS.WAVE.defaultC,
@@ -1379,6 +1445,7 @@
           },
         ],
         emits: [],
+        valves: [],
         camera: { rad: 60, theta: 45, phi: 60 },
         globalDen: Array.from(new Float32Array(80 * 80).fill(0)),
         globalCoupling: [],
@@ -1446,7 +1513,6 @@
               console.error("No data to save.");
               return;
           }
-          // Use full history length if looping is active, respecting loop marker range if not looping
           const start = IS_LOOPING ? 0 : LOOP_START_IDX; 
           const end = IS_LOOPING ? data.length : Math.min(LOOP_END_IDX, data.length);
           const clipData = data.slice(start, end);
@@ -1472,11 +1538,9 @@
           const N = data.length;
           const clip = data.slice(startIdx, endIdx);
 
-          // Apply crossfade only if looping is enabled
           if (IS_LOOPING) {
              const fadeLength = Math.min(fadeSamples, Math.floor(N / 4));
              if (fadeLength > 0) {
-                // If looping, we just use the entire array and crossfade the start/end
                 const clipLength = clip.length;
                 for (let i = 0; i < fadeLength; i++) {
                     const indexA = clipLength - fadeLength + i;
@@ -1503,10 +1567,8 @@
       }
 
       function stopRealtimeAudio() {
-          // If we stop live audio, ensure the sim is driven by the graphics loop again
           if (REALTIME_PROCESSOR) {
               try {
-                   // Immediately stop processing via flag
                    IS_REALTIME_AUDIO = false; 
                    
                    if (REALTIME_GAIN && AUDIO_CONTEXT) {
@@ -1514,7 +1576,6 @@
                        REALTIME_GAIN.gain.exponentialRampToValueAtTime(0.0001, AUDIO_CONTEXT.currentTime + 0.05); 
                    }
 
-                   // Wait for the fade-out time (50ms) before disconnecting
                    setTimeout(() => {
                       if (REALTIME_PROCESSOR) {
                           REALTIME_PROCESSOR.disconnect();
@@ -1566,7 +1627,6 @@
               });
           }
 
-          // Use full data length if looping, or marker range if not looping
           const start = IS_LOOPING ? 0 : LOOP_START_IDX;
           const end = IS_LOOPING ? data.length : Math.min(LOOP_END_IDX, data.length);
 
@@ -1577,7 +1637,6 @@
 
           let playbackData;
           if (IS_LOOPING) {
-              // Simpler loop implementation using the whole buffer
               playbackData = normalizedData;
           } else {
               playbackData = normalizedData.slice(start, end);
@@ -1619,7 +1678,7 @@
               stopAudio();
           };
       }
-      const SIM_SAMPLES_PER_STEP = 2;
+      const SIM_SAMPLES_PER_STEP = 1;
 function connectLiveAudio() {
     if (!AUDIO_CONTEXT) {
         setupAudio();
@@ -1640,35 +1699,25 @@ function connectLiveAudio() {
         const outputBuffer = e.outputBuffer.getChannelData(0);
         const bufferSize = outputBuffer.length;
         
-        // Find the active probe to get its sensitivity for the gain ramp
         const em = emits.find((x) => x.id === ACTIVE_PROBE_ID);
         const sensitivity = em ? em.probeSensitivity : 0.5;
-        const TARGET_GAIN = 0.5 * sensitivity; // Max volume is 0.5, modulated by probe sensitivity (0-1)
+        const TARGET_GAIN = 0.5 * sensitivity;
 
         for (let i = 0; i < bufferSize; i++) {
-            // Run one physics step
             if(i % SIM_SAMPLES_PER_STEP == 0) {
                 sim(); 
             }
 
-            // Retrieve the *unscaled* last recorded probe data
-            // We rely on the fact that PROBE_HISTORY stores the already scaled value 
-            // from recordProbeData. However, if we want to use the Gain Node for scaling,
-            // we must ensure PROBE_HISTORY is unscaled. 
-            // For now, let's trust recordProbeData and adjust the gain level.
             let liveSample = PROBE_HISTORY.length > 0 
                 ? PROBE_HISTORY[PROBE_HISTORY.length - 1] 
                 : 0;
 
-            // Apply soft clamping (hyperbolic tangent) for glitch-free output, 
-            // but rely on the Gain Node (REALTIME_GAIN) for amplitude scaling.
-            let scaledSample = liveSample; // liveSample already includes sensitivity
+            let scaledSample = liveSample;
             scaledSample = Math.tanh(scaledSample * 2.0) / 2.0;
 
             outputBuffer[i] = scaledSample; 
         }
 
-        // Ramp up/maintain to the target gain smoothly
         REALTIME_GAIN.gain.exponentialRampToValueAtTime(TARGET_GAIN, AUDIO_CONTEXT.currentTime + 0.1); 
     };
     
@@ -1696,7 +1745,6 @@ function connectLiveAudio() {
               return;
           }
 
-          // Start the system
           connectLiveAudio();
           IS_REALTIME_AUDIO = true;
 
@@ -2123,6 +2171,7 @@ void main() {
 `;
 
       var selectedEmitterId = null;
+      var selectedValveId = null;
       var stampPreviewMesh = null;
 
       var rgbToNormVec = (rgb) => [
@@ -2323,9 +2372,7 @@ void main() {
 
       function togglePlayPause() {
         IS_PAUSED = !IS_PAUSED;
-        // Pause/unpause also affects audio thread execution
         if (IS_REALTIME_AUDIO) {
-            // Need to handle immediate stop if pausing while live mode is active
             if (IS_PAUSED) {
                 if (REALTIME_GAIN && AUDIO_CONTEXT) {
                     REALTIME_GAIN.gain.setValueAtTime(REALTIME_GAIN.gain.value, AUDIO_CONTEXT.currentTime);
@@ -2454,6 +2501,7 @@ function removeLayer() {
     if (layers.length <= 1) return;
     var idxToRemove = layers.length - 1;
     emits = emits.filter((e) => e.lIdx !== idxToRemove);
+    VALVES = VALVES.filter((v) => v.lIdx !== idxToRemove);
     layers.pop();
     u.pop();
     u_prev.pop();
@@ -3003,13 +3051,58 @@ function createBaseUniforms(layer, vizCfg, volOpacity) {
         emitMeshes.forEach(disposeMesh);
         emitMeshes = [];
 
-        if (brush !== "EMITTER_PLACE" && emits.length === 0) return;
+        if (brush !== "EMITTER_PLACE" && emits.length === 0 && VALVES.length === 0) return;
+        
+        // --- Valve Rendering ---
+        VALVES.forEach((v) => {
+            var wPos = gtw(v.i, v.j, v.lIdx);
+            
+            let col = v.isKeyPressed ? 0x00ffaa : 0x005533;
+            var sphereColor = v.id === selectedValveId ? 0xffff00 : col;
+            
+            const worldScale = 50.0 / (GRID > 1 ? GRID - 1 : 1);
+            var radius = v.radius * worldScale * 0.5;
 
+            var g = new THREE.SphereGeometry(radius, 16, 16);
+            var m = new THREE.Mesh(
+              g,
+              new THREE.MeshBasicMaterial({
+                color: sphereColor,
+                transparent: true,
+                opacity: v.isKeyPressed ? 0.3 : 0.8,
+              }),
+            );
+            m.position.set(wPos.x, wPos.y + radius, wPos.z);
+            m.userData = {
+              eid: v.id,
+              type: "VALVE",
+              lIdx: v.lIdx,
+              part: "BODY",
+            };
+            scene.add(m);
+            emitMeshes.push(m);
+            
+            const probeRadiusWorld = v.radius * worldScale;
+            const probeGeo = new THREE.RingGeometry(probeRadiusWorld - 0.1, probeRadiusWorld + 0.1, 32);
+            probeGeo.rotateX(-Math.PI / 2);
+            const probeMat = new THREE.MeshBasicMaterial({
+                color: col,
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: 0.5
+            });
+            const ringMesh = new THREE.Mesh(probeGeo, probeMat);
+            ringMesh.position.set(wPos.x, wPos.y + 0.01, wPos.z);
+            ringMesh.userData = { eid: v.id, part: "RING" };
+            scene.add(ringMesh);
+            emitMeshes.push(ringMesh);
+        });
+
+        // --- Emitter/Probe Rendering ---
         emits.forEach((e) => {
           var wPos = gtw(e.i, e.j, e.lIdx);
           
-          let col = e.isProbe ? varToRgba('--color-probe', 1.0) : (e.type === "EMITTER" || e.shp !== "STATIC" ? 0x00aaff : 0xff3333);
-          if (e.isProbe) col = 0xe568b2;
+          let col = e.isProbe ? 0xe568b2 : (e.type === "EMITTER" || e.shp !== "STATIC" ? 0x00aaff : 0xff3333);
 
           var sphereColor = e.id === selectedEmitterId ? 0xffff00 : col;
 
@@ -3224,20 +3317,17 @@ function recordProbeData() {
         }
         
         let averageValue = samples > 0 ? sampledValue / samples : 0;
-        
-        // MODIFICATION: Apply probe sensitivity as a gain factor
         let recordedValue = averageValue * e.probeSensitivity;
         
 
         if (e.id === ACTIVE_PROBE_ID) {
             PROBE_HISTORY.push(recordedValue);
-            // Only manage history buffer size if it's the active probe
             while (PROBE_HISTORY.length > PROBE_HISTORY_LENGTH) {
                 PROBE_HISTORY.shift();
             }
         }
         
-        totalValue += recordedValue; // Use the scaled value for totalValue
+        totalValue += recordedValue;
         activeProbeCount++;
     });
     
@@ -3246,7 +3336,6 @@ function recordProbeData() {
         renderProbeGraph(PROBE_HISTORY, maxAbs);
     }
     if (ACTIVE_PROBE_ID && IS_REALTIME_AUDIO) {
-        // Update graph less frequently to avoid slowing down audio thread
         if (PROBE_TIME_STEP_COUNTER % 60 === 0) {
             const maxAbs = PROBE_HISTORY.reduce((max, val) => Math.max(max, Math.abs(val)), 0);
             renderProbeGraph(PROBE_HISTORY, maxAbs);
@@ -3327,11 +3416,32 @@ function sim() {
           volK = BASE_LAYER_CFG.K;
         }
 
-        // REMOVED: const layerCouplingContributions = layers.map(() => new Float32Array(N * N));
-        // REMOVED: const layerDensityModulations = layers.map(() => new Float32Array(N * N));
-
         const DT_factor_viscosity = DT_FACTOR * VISCOSITY;
         const K_FACTOR = IS_3D_MODE ? volK * DT_FACTOR : DT_FACTOR;
+        
+        VALVES.forEach((v) => {
+            const targetDensity = v.isKeyPressed ? v.openDensity : v.closedDensity;
+            const densityToWrite = targetDensity; 
+
+            const N = GRID;
+            const HALF_SIZE = v.radius; 
+            const den_arr = den[v.lIdx];
+
+            for (let r = -HALF_SIZE; r <= HALF_SIZE; r++) {
+                for (let c = -HALF_SIZE; c <= HALF_SIZE; c++) {
+                    const rr = v.i + r;
+                    const cc = v.j + c;
+
+                    if (rr >= 0 && rr < N && cc >= 0 && cc < N) {
+                        const idx = rr * N + cc;
+                        
+                        const requiredDensity = densityToWrite; 
+                        
+                        den_arr[idx] = requiredDensity; 
+                    }
+                }
+            }
+        });
 
         if (!IS_3D_MODE && GLOBAL_COUPLING_LINKS.length > 0) {
           GLOBAL_COUPLING_LINKS.forEach((link) => {
@@ -3436,12 +3546,11 @@ function sim() {
               const U_CURR = u_current_arr[ptr];
               const U_PREV = u_prev_arr[ptr];
 
-              // --- FIX 2: Correct Laplacian Calculation ---
               let lap =
-                u_current_arr[ptr + 1] + // +X
-                u_current_arr[ptr - 1] + // -X
-                u_current_arr[ptr + N] + // +Y
-                u_current_arr[ptr - N]; // -Y
+                u_current_arr[ptr + 1] +
+                u_current_arr[ptr - 1] +
+                u_current_arr[ptr + N] +
+                u_current_arr[ptr - N];
               
               let COUPLING_TERM = 0; 
 
@@ -3617,7 +3726,7 @@ function sim() {
         u = u_aux;
         u_aux = temp;
         MAX_WAVE_ABS = max_wave_abs;
-      }
+}
 
       function lerp(a, b, t) {
         return a + (b - a) * t;
@@ -3644,13 +3753,15 @@ function sim() {
         }
         
         if (ACTIVE_PROBE_ID && !IS_PAUSED) {
-            // Update UI/Visualization elements in the graphics loop
             updateProbeMenuInfo();
-            // Redraw graph (less frequently, as it's expensive)
             if (TIME % 5 === 0) {
                 const maxAbs = PROBE_HISTORY.reduce((max, val) => Math.max(max, Math.abs(val)), 0);
                 renderProbeGraph(PROBE_HISTORY, maxAbs);
             }
+        }
+
+        if (selectedValveId) {
+            updateValveMenuInfo();
         }
 
         if (AUTO_EXPOSURE) {
@@ -3767,6 +3878,7 @@ function sim() {
             obj: ems[0].object,
             lIdx: ems[0].object.userData.lIdx,
             point: ems[0].point,
+            type: ems[0].object.userData.type,
           };
 
         const meshCandidates = meshes.filter((m) => m.visible);
@@ -3780,6 +3892,7 @@ function sim() {
             lIdx: ps[0].object.userData.idx,
             point: ps[0].point,
             face: ps[0].face,
+            type: "MESH",
           };
         return null;
       }
@@ -3787,27 +3900,46 @@ function sim() {
       function interact(i, j, l) {
         if (l >= layers.length) return;
 
-        if (brush === "EMITTER_PLACE") {
+        if (brush === "EMITTER_PLACE" || brush === "VALVE_PLACE") {
           let targetLIdx = l;
           if (IS_3D_MODE) {
             targetLIdx = Math.floor(layers.length / 2);
           }
           
-          emits.push({
-            ...BASE_PROBE_CFG,
-            i,
-            j,
-            lIdx: targetLIdx,
-            type: "EMITTER",
-            id: Date.now(),
-            st: 1,
-            rt: 100,
-            off: 0,
-            shp: "STATIC",
-            geo: "POINT",
-            i2: i,
-            j2: j,
-          });
+          if (brush === "VALVE_PLACE") {
+              const newValve = {
+                  ...BASE_VALVE_CFG,
+                  id: Date.now() + Math.random(),
+                  i, j, lIdx: targetLIdx,
+                  isKeyPressed: false,
+                  key: BASE_VALVE_CFG.key, 
+                  radius: BASE_VALVE_CFG.radius,
+                  openDensity: BASE_VALVE_CFG.openDensity,
+                  closedDensity: BASE_VALVE_CFG.closedDensity,
+              };
+              VALVES.push(newValve);
+              selectedValveId = newValve.id;
+              updateValveInspector();
+              syncM();
+          } else {
+              emits.push({
+                ...BASE_PROBE_CFG,
+                i,
+                j,
+                lIdx: targetLIdx,
+                type: "EMITTER",
+                id: Date.now(),
+                st: 1,
+                rt: 100,
+                off: 0,
+                shp: "STATIC",
+                geo: "POINT",
+                i2: i,
+                j2: j,
+              });
+              selectedEmitterId = emits[emits.length - 1].id;
+              updateEmitterInspector();
+          }
           syncE();
           isDrag = false;
           return;
@@ -3926,17 +4058,13 @@ function sim() {
         }
       }
 
-// Replace the original resizeSim function entirely with this version
-
 function resizeSim(newGrid) {
     const expansionState = getExpansionState();
     if (newGrid === GRID) return;
     var oldGrid = GRID;
     
-    // --- 1. Store and resample all necessary data ---
     var newU = [], newUPrev = [], newDen = [], newGlobalDen = new Float32Array(newGrid * newGrid);
 
-    // Resample layer data
     layers.forEach((l, idx) => {
         var nU = new Float32Array(newGrid * newGrid);
         var nUP = new Float32Array(newGrid * newGrid);
@@ -3955,7 +4083,6 @@ function resizeSim(newGrid) {
         newDen.push(nD);
     });
 
-    // Resample global density
     for (let r = 0; r < newGrid; r++) {
         for (let c = 0; c < newGrid; c++) {
             var nr = r / (newGrid - 1);
@@ -3969,23 +4096,17 @@ function resizeSim(newGrid) {
         }
     }
 
-    // --- 2. Update Grid, Reset Arrays, and Restore Data ---
     GRID = newGrid;
     $("l-res").innerText = GRID;
     
-    // Re-initialize all arrays (u, u_prev, den, u_aux, layerDensityModulations) 
-    // to the new size using initData, which also calls syncM().
-    // We pass true to skip re-initializing GLOBAL_DEN since we just calculated it.
     initData(true); 
     
-    // Restore the resampled data
     u = newU;
     u_prev = newUPrev;
-    u_aux = newU.map(() => new Float32Array(GRID * GRID)); // u_aux gets fresh memory
+    u_aux = newU.map(() => new Float32Array(GRID * GRID));
     den = newDen;
     GLOBAL_DEN = newGlobalDen;
 
-    // --- 3. Update Emitter Positions (still needed) ---
     var ratio = (GRID - 1) / (oldGrid - 1);
     emits.forEach((e) => {
         e.i = Math.round(e.i * ratio);
@@ -3993,10 +4114,14 @@ function resizeSim(newGrid) {
         if (e.i2) e.i2 = Math.round(e.i2 * ratio);
         if (e.j2) e.j2 = Math.round(e.j2 * ratio);
     });
+    VALVES.forEach((v) => {
+        v.i = Math.round(v.i * ratio);
+        v.j = Math.round(v.j * ratio);
+    });
 
-    // --- 4. Final Sync and UI Restore ---
-    syncE(); // Emitter position sync
-    syncM(); // Mesh creation/attribute update sync
+
+    syncE();
+    syncM();
     restoreExpansionState(expansionState);
 }
 
@@ -4005,13 +4130,15 @@ function resizeSim(newGrid) {
         u.forEach((arr) => arr.fill(0));
         u_prev.forEach((arr) => arr.fill(0));
         selectedEmitterId = null;
+        selectedValveId = null;
         updateEmitterInspector();
+        updateValveInspector();
         syncE();
       }
 
-      function getAppState() {
-        return {
-          global: {
+function getAppState() {
+    return {
+        global: {
             GRID,
             GAP,
             ZSC,
@@ -4029,18 +4156,18 @@ function resizeSim(newGrid) {
             GLOBAL_DEN_REFRACTION: GLOBAL_DEN_REFRACTION,
             EXPOSURE: EXPOSURE,
             AUTO_EXPOSURE: AUTO_EXPOSURE,
-          },
-          layers: layers.map((l) => ({
+        },
+        layers: layers.map((l, i) => ({
             ...l,
+            den: Array.from(den[i]),
             gradientStops: l.gradientStops.map((arr) => [...arr]),
-
             volShadingMode: BASE_LAYER_CFG.volShadingMode,
             volGradientStops: BASE_LAYER_CFG.volGradientStops.map((arr) => [...arr]),
             volGradientBias: BASE_LAYER_CFG.volGradientBias,
             volGradientContrast: BASE_LAYER_CFG.volGradientContrast,
             pointFalloff: BASE_LAYER_CFG.pointFalloff,
-          })),
-          emits: emits.map((e) => ({
+        })),
+        emits: emits.map((e) => ({
             i: e.i,
             j: e.j,
             lIdx: e.lIdx,
@@ -4052,16 +4179,25 @@ function resizeSim(newGrid) {
             geo: e.geo,
             i2: e.i2,
             j2: e.j2,
-            isProbe: e.isProbe || false, 
+            isProbe: e.isProbe || false,
             probeRadius: e.probeRadius || BASE_PROBE_CFG.probeRadius,
             probeSensitivity: e.probeSensitivity || BASE_PROBE_CFG.probeSensitivity,
-          })),
-          camera: { rad, theta, phi },
-          globalDen: Array.from(GLOBAL_DEN),
-          globalCoupling: GLOBAL_COUPLING_LINKS,
-          customFormula: GLOBAL_CUSTOM_FORMULA,
-        };
-      }
+        })),
+        valves: VALVES.map((v) => ({
+            i: v.i,
+            j: v.j,
+            lIdx: v.lIdx,
+            radius: v.radius,
+            key: v.key,
+            openDensity: v.openDensity,
+            closedDensity: v.closedDensity,
+        })),
+        camera: { rad, theta, phi },
+        globalDen: Array.from(GLOBAL_DEN),
+        globalCoupling: GLOBAL_COUPLING_LINKS,
+        customFormula: GLOBAL_CUSTOM_FORMULA,
+    };
+}
 
       function setAppState(cfg) {
         GRID = cfg.global.GRID || DEFAULT_STATE_CONFIG.global.GRID;
@@ -4238,177 +4374,196 @@ function resizeSim(newGrid) {
         input.click();
       }
 
-      function fullResetConfig(config) {
-        TIME = 0;
-        layerCounter = 0;
-        emits = [];
-        shapes = [];
-        PROBE_HISTORY = [];
-        ACTIVE_PROBE_ID = null;
-        $("probe-menu").style.display = 'none';
-        stopAudio();
-        stopRealtimeAudio();
+function fullResetConfig(config) {
+    TIME = 0;
+    layerCounter = 0;
+    emits = [];
+    VALVES = [];
+    shapes = [];
+    PROBE_HISTORY = [];
+    ACTIVE_PROBE_ID = null;
+    $("probe-menu").style.display = 'none';
+    stopAudio();
+    stopRealtimeAudio();
 
-        let cfg = config || DEFAULT_STATE_CONFIG;
+    let cfg = config || DEFAULT_STATE_CONFIG;
 
-        GRID = cfg.global.GRID || DEFAULT_STATE_CONFIG.global.GRID;
-        $("i-res").value = GRID;
-        GAP = cfg.global.GAP || DEFAULT_STATE_CONFIG.global.GAP;
-        $("i-gap").value = GAP;
-        ZSC = cfg.global.ZSC || DEFAULT_STATE_CONFIG.global.ZSC;
-        $("i-z").value = ZSC;
-        DT_FACTOR =
-          cfg.global.DT_FACTOR || DEFAULT_STATE_CONFIG.global.DT_FACTOR;
-        $("i-dt").value = DT_FACTOR;
-        VISCOSITY =
-          cfg.global.VISCOSITY || DEFAULT_STATE_CONFIG.global.VISCOSITY;
-        $("i-vis").value = VISCOSITY;
-        lInt = cfg.global.lInt || DEFAULT_STATE_CONFIG.global.lInt;
-        $("i-li").value = lInt;
-        REFLECTIVITY =
-          cfg.global.REFLECTIVITY || DEFAULT_STATE_CONFIG.global.REFLECTIVITY;
-        $("i-refl").value = REFLECTIVITY;
-        visMin = cfg.global.visMin || DEFAULT_STATE_CONFIG.global.visMin;
-        $("i-vis-min").value = visMin;
-        visMax = cfg.global.visMax || DEFAULT_STATE_CONFIG.global.visMax;
-        $("i-vis-max").value = visMax;
-        GLOBAL_DEN_ABSORPTION =
-          cfg.global.GLOBAL_DEN_ABSORPTION ||
-          DEFAULT_STATE_CONFIG.global.GLOBAL_DEN_ABSORPTION;
-        $("i-gden-abs").value = GLOBAL_DEN_ABSORPTION;
-        GLOBAL_DEN_REFRACTION =
-          cfg.global.GLOBAL_DEN_REFRACTION ||
-          DEFAULT_STATE_CONFIG.global.GLOBAL_DEN_REFRACTION;
-        $("i-gden-ref").value = GLOBAL_DEN_REFRACTION;
+    GRID = cfg.global.GRID || DEFAULT_STATE_CONFIG.global.GRID;
+    $("i-res").value = GRID;
+    GAP = cfg.global.GAP || DEFAULT_STATE_CONFIG.global.GAP;
+    $("i-gap").value = GAP;
+    ZSC = cfg.global.ZSC || DEFAULT_STATE_CONFIG.global.ZSC;
+    $("i-z").value = ZSC;
+    DT_FACTOR =
+        cfg.global.DT_FACTOR || DEFAULT_STATE_CONFIG.global.DT_FACTOR;
+    $("i-dt").value = DT_FACTOR;
+    VISCOSITY =
+        cfg.global.VISCOSITY || DEFAULT_STATE_CONFIG.global.VISCOSITY;
+    $("i-vis").value = VISCOSITY;
+    lInt = cfg.global.lInt || DEFAULT_STATE_CONFIG.global.lInt;
+    $("i-li").value = lInt;
+    REFLECTIVITY =
+        cfg.global.REFLECTIVITY || DEFAULT_STATE_CONFIG.global.REFLECTIVITY;
+    $("i-refl").value = REFLECTIVITY;
+    visMin = cfg.global.visMin || DEFAULT_STATE_CONFIG.global.visMin;
+    $("i-vis-min").value = visMin;
+    visMax = cfg.global.visMax || DEFAULT_STATE_CONFIG.global.visMax;
+    $("i-vis-max").value = visMax;
+    GLOBAL_DEN_ABSORPTION =
+        cfg.global.GLOBAL_DEN_ABSORPTION ||
+        DEFAULT_STATE_CONFIG.global.GLOBAL_DEN_ABSORPTION;
+    $("i-gden-abs").value = GLOBAL_DEN_ABSORPTION;
+    GLOBAL_DEN_REFRACTION =
+        cfg.global.GLOBAL_DEN_REFRACTION ||
+        DEFAULT_STATE_CONFIG.global.GLOBAL_DEN_REFRACTION;
+    $("i-gden-ref").value = GLOBAL_DEN_REFRACTION;
 
-        EXPOSURE = cfg.global.EXPOSURE || DEFAULT_STATE_CONFIG.global.EXPOSURE;
-        $("i-exposure").value = EXPOSURE;
-        AUTO_EXPOSURE =
-          cfg.global.AUTO_EXPOSURE || DEFAULT_STATE_CONFIG.global.AUTO_EXPOSURE;
-        $("cb-auto-exposure").checked = AUTO_EXPOSURE;
+    EXPOSURE = cfg.global.EXPOSURE || DEFAULT_STATE_CONFIG.global.EXPOSURE;
+    $("i-exposure").value = EXPOSURE;
+    AUTO_EXPOSURE =
+        cfg.global.AUTO_EXPOSURE || DEFAULT_STATE_CONFIG.global.AUTO_EXPOSURE;
+    $("cb-auto-exposure").checked = AUTO_EXPOSURE;
 
-        $("i-sp").value =
-          cfg.global.sunPitch || DEFAULT_STATE_CONFIG.global.sunPitch;
-        $("i-sy").value =
-          cfg.global.sunYaw || DEFAULT_STATE_CONFIG.global.sunYaw;
+    $("i-sp").value =
+        cfg.global.sunPitch || DEFAULT_STATE_CONFIG.global.sunPitch;
+    $("i-sy").value =
+        cfg.global.sunYaw || DEFAULT_STATE_CONFIG.global.sunYaw;
 
-        IS_3D_MODE =
-          cfg.IS_3D_MODE !== undefined
+    const is3D =
+        cfg.IS_3D_MODE !== undefined
             ? cfg.IS_3D_MODE
             : cfg.global.IS_3D_MODE || DEFAULT_STATE_CONFIG.global.IS_3D_MODE;
-        VOL_LAYERS =
-          cfg.VOL_LAYERS !== undefined
+    VOL_LAYERS =
+        cfg.VOL_LAYERS !== undefined
             ? cfg.VOL_LAYERS
             : cfg.global.VOL_LAYERS || DEFAULT_STATE_CONFIG.global.VOL_LAYERS;
-        const iVd = $("i-vd");
-        if (iVd) iVd.value = VOL_LAYERS;
+    const iVd = $("i-vd");
+    if (iVd) iVd.value = VOL_LAYERS;
 
-        $("i-sp").value =
-          cfg.global.sunPitch || DEFAULT_STATE_CONFIG.global.sunPitch;
-        $("i-sy").value =
-          cfg.global.sunYaw || DEFAULT_STATE_CONFIG.global.sunYaw;
+    IS_3D_MODE = is3D;
 
-        const is3D = IS_3D_MODE;
+    $("i-sp").value =
+        cfg.global.sunPitch || DEFAULT_STATE_CONFIG.global.sunPitch;
+    $("i-sy").value =
+        cfg.global.sunYaw || DEFAULT_STATE_CONFIG.global.sunYaw;
 
-        layers = [];
-        layerCounter = 0;
+    layers = [];
+    layerCounter = 0;
 
-        let layerCfg = cfg.layers || DEFAULT_STATE_CONFIG.layers;
+    let layerCfg = cfg.layers || DEFAULT_STATE_CONFIG.layers;
 
-        if (layerCfg.length > 0) {
-          BASE_LAYER_CFG.volShadingMode =
+    if (layerCfg.length > 0) {
+        BASE_LAYER_CFG.volShadingMode =
             layerCfg[0].volShadingMode || BASE_LAYER_CFG.volShadingMode;
-          BASE_LAYER_CFG.volGradientStops =
+        BASE_LAYER_CFG.volGradientStops =
             layerCfg[0].volGradientStops || DEFAULT_VOL_GRADIENT_STOPS;
-          BASE_LAYER_CFG.volGradientBias =
+        BASE_LAYER_CFG.volGradientBias =
             layerCfg[0].volGradientBias || BASE_LAYER_CFG.volGradientBias;
-          BASE_LAYER_CFG.volGradientContrast =
+        BASE_LAYER_CFG.volGradientContrast =
             layerCfg[0].volGradientContrast ||
             BASE_LAYER_CFG.volGradientContrast;
-          BASE_LAYER_CFG.pointFalloff =
+        BASE_LAYER_CFG.pointFalloff =
             layerCfg[0].pointFalloff || BASE_LAYER_CFG.pointFalloff;
 
-          BASE_LAYER_CFG.C = layerCfg[0].C;
-          BASE_LAYER_CFG.D = layerCfg[0].D;
-          BASE_LAYER_CFG.K = layerCfg[0].K;
-        }
+        BASE_LAYER_CFG.C = layerCfg[0].C;
+        BASE_LAYER_CFG.D = layerCfg[0].D;
+        BASE_LAYER_CFG.K = layerCfg[0].K;
+    }
 
-        if (is3D) {
-          for (let k = 0; k < VOL_LAYERS; k++) {
+    if (is3D) {
+        for (let k = 0; k < VOL_LAYERS; k++) {
             layers.push(defL(layerCounter++));
-          }
-        } else {
-          layerCfg.forEach((lCfg) => {
+        }
+    } else {
+        layerCfg.forEach((lCfg) => {
             let newL = defL(layerCounter++);
             Object.assign(newL, lCfg);
 
             const preset =
-              FORMULA_PRESETS[newL.formulaKey] || FORMULA_PRESETS.WAVE;
+                FORMULA_PRESETS[newL.formulaKey] || FORMULA_PRESETS.WAVE;
             newL.C_label = preset.C_label;
             newL.D_label = preset.D_label;
             layers.push(newL);
-          });
-        }
+        });
+    }
 
-        emits = (cfg.emits || []).map(e => ({
-            ...e, 
-            id: Date.now() + Math.random(),
-            isProbe: e.isProbe || false,
-            probeRadius: e.probeRadius || BASE_PROBE_CFG.probeRadius,
-            probeSensitivity: e.probeSensitivity || BASE_PROBE_CFG.probeSensitivity,
-        }));
+    emits = (cfg.emits || []).map(e => ({
+        ...e,
+        id: Date.now() + Math.random(),
+        isProbe: e.isProbe || false,
+        probeRadius: e.probeRadius || BASE_PROBE_CFG.probeRadius,
+        probeSensitivity: e.probeSensitivity || BASE_PROBE_CFG.probeSensitivity,
+    }));
 
-        if (cfg.camera) {
-          rad = cfg.camera.rad || DEFAULT_STATE_CONFIG.camera.rad;
-          theta = cfg.camera.theta || DEFAULT_STATE_CONFIG.camera.theta;
-          phi = cfg.camera.phi || DEFAULT_STATE_CONFIG.camera.phi;
-          updCam();
-        }
+    VALVES = (cfg.valves || []).map(v => ({
+        ...v,
+        id: Date.now() + Math.random(),
+        isKeyPressed: false,
+    }));
 
-        initData();
+    if (cfg.camera) {
+        rad = cfg.camera.rad || DEFAULT_STATE_CONFIG.camera.rad;
+        theta = cfg.camera.theta || DEFAULT_STATE_CONFIG.camera.theta;
+        phi = cfg.camera.phi || DEFAULT_STATE_CONFIG.camera.phi;
+        updCam();
+    }
 
-        if (cfg.globalDen && Array.isArray(cfg.globalDen)) {
-          GLOBAL_DEN = new Float32Array(cfg.globalDen);
-        } else {
-          GLOBAL_DEN.fill(0);
-        }
+    initData();
 
-        GLOBAL_COUPLING_LINKS = cfg.globalCoupling || [];
+    if (cfg.layers && Array.isArray(cfg.layers) && !is3D) {
+        cfg.layers.forEach((lCfg, i) => {
+            if (lCfg.den && Array.isArray(lCfg.den) && den[i]) {
+                if (lCfg.den.length === GRID * GRID) {
+                    den[i].set(lCfg.den);
+                }
+            }
+        });
+    }
 
-        GLOBAL_COUPLING_LINKS = GLOBAL_COUPLING_LINKS.map((link) => ({
-          ...link,
-          type: link.type || "APPLY_FORCE",
-          targetProperty: link.targetProperty || "AMPLITUDE",
-        }));
+    if (cfg.globalDen && Array.isArray(cfg.globalDen)) {
+        GLOBAL_DEN = new Float32Array(cfg.globalDen);
+    } else {
+        GLOBAL_DEN.fill(0);
+    }
 
-        updateSimControls();
+    GLOBAL_COUPLING_LINKS = cfg.globalCoupling || [];
 
-        if (cfg.initialDensity) {
-          currentSDFParams = Object.assign(
+    GLOBAL_COUPLING_LINKS = GLOBAL_COUPLING_LINKS.map((link) => ({
+        ...link,
+        type: link.type || "APPLY_FORCE",
+        targetProperty: link.targetProperty || "AMPLITUDE",
+    }));
+
+    updateSimControls();
+
+    if (cfg.initialDensity) {
+        currentSDFParams = Object.assign(
             currentSDFParams,
             cfg.initialDensity,
-          );
+        );
 
-          placeShape(
+        placeShape(
             GRID / 2,
             GRID / 2,
             IS_3D_MODE ? 0 : layers.findIndex((l) => l.intr),
-          );
-        }
+        );
+    }
 
-        updateUI();
+    updateUI();
 
-        $("i-sp").oninput();
-        $("l-gap").innerText = GAP;
-        $("l-z").innerText = ZSC.toFixed(1);
-        $("l-vism").innerText = `${visMin.toFixed(2)} - ${visMax.toFixed(2)}`;
+    $("i-sp").oninput();
+    $("l-gap").innerText = GAP;
+    $("l-z").innerText = ZSC.toFixed(1);
+    $("l-vism").innerText = `${visMin.toFixed(2)} - ${visMax.toFixed(2)}`;
 
-        selectedEmitterId = null;
-        updateEmitterInspector();
+    selectedEmitterId = null;
+    selectedValveId = null;
+    updateEmitterInspector();
+    updateValveInspector();
 
-        resetSimulationAndState();
-        IS_PAUSED = false;
-      }
+    resetSimulationAndState();
+    IS_PAUSED = false;
+}
 
 function initData(keepGlobalDen = false) { 
     GRID = +$("i-res").value;
@@ -4435,110 +4590,187 @@ function initData(keepGlobalDen = false) {
         TIME = 0;
         PROBE_HISTORY = [];
         emits = emits.filter((e) => e.type !== "EMITTER_LINE_DRAG");
+        VALVES.forEach((v) => v.isKeyPressed = false);
         u.forEach((arr) => arr.fill(0));
         u_prev.forEach((arr) => arr.fill(0));
         MAX_WAVE_ABS = 0.0;
         selectedEmitterId = null;
+        selectedValveId = null;
         updateEmitterInspector();
+        updateValveInspector();
         syncE();
         stopAudio();
         stopRealtimeAudio();
       }
 
      function updateEmitterInspector() {
-    const menu = $("emit-menu");
-    const probeControls = $("probe-controls-group");
-    const emitterControls = $("emitter-controls-group");
-    const toggleBtn = $("em-probe-toggle");
-    const audioBtn = $("em-audio-btn");
-    
-    if (!selectedEmitterId) {
-      menu.style.display = "none";
-      editEmitId = null;
-      return;
-    }
-    
-    const em = emits.find((x) => x.id === selectedEmitterId);
-    if (!em) {
-      selectedEmitterId = null;
-      menu.style.display = "none";
-      editEmitId = null;
-      return;
-    }
-    
-    editEmitId = em.id;
-    menu.style.display = "block";
-
-    const isProbe = em.isProbe || false;
-    
-    if (isProbe) {
-        probeControls.style.display = 'block';
-        emitterControls.style.display = 'none';
-        toggleBtn.textContent = 'Set as Emitter';
-        toggleBtn.classList.remove('probe-active');
-        audioBtn.style.display = 'block';
+        const menu = $("emit-menu");
+        const valveMenu = $("valve-menu");
+        const probeControls = $("probe-controls-group");
+        const emitterControls = $("emitter-controls-group");
+        const toggleBtn = $("em-probe-toggle");
+        const audioBtn = $("em-audio-btn");
         
-        if (ACTIVE_PROBE_ID !== selectedEmitterId) {
-            ACTIVE_PROBE_ID = selectedEmitterId;
-            PROBE_HISTORY = [];
-            $("probe-menu").style.display = 'none';
-            stopAudio();
-            stopRealtimeAudio();
+        if (!selectedEmitterId) {
+          menu.style.display = "none";
+          editEmitId = null;
+          return;
         }
         
-        $("pr-rad").value = em.probeRadius;
-        $("pr-rad-v").innerText = em.probeRadius;
-        $("pr-sens").value = em.probeSensitivity;
-        $("pr-sens-v").innerText = em.probeSensitivity.toFixed(2);
+        const em = emits.find((x) => x.id === selectedEmitterId);
+        if (!em) {
+          selectedEmitterId = null;
+          menu.style.display = "none";
+          editEmitId = null;
+          return;
+        }
         
-        EV("pr-rad", "input", (e) => {
+        editEmitId = em.id;
+        menu.style.display = "block";
+        valveMenu.style.display = "none";
+        selectedValveId = null;
+
+        const isProbe = em.isProbe || false;
+        
+        if (isProbe) {
+            probeControls.style.display = 'block';
+            emitterControls.style.display = 'none';
+            toggleBtn.textContent = 'Set as Emitter';
+            toggleBtn.classList.remove('probe-active');
+            audioBtn.style.display = 'block';
+            
+            if (ACTIVE_PROBE_ID !== selectedEmitterId) {
+                ACTIVE_PROBE_ID = selectedEmitterId;
+                PROBE_HISTORY = [];
+                $("probe-menu").style.display = 'none';
+                stopAudio();
+                stopRealtimeAudio();
+            }
+            
+            $("pr-rad").value = em.probeRadius;
+            $("pr-rad-v").innerText = em.probeRadius;
+            $("pr-sens").value = em.probeSensitivity;
+            $("pr-sens-v").innerText = em.probeSensitivity.toFixed(2);
+            
+            EV("pr-rad", "input", (e) => {
+                const val = +e.target.value;
+                em.probeRadius = val;
+                $("pr-rad-v").innerText = val;
+                syncE();
+            });
+            EV("pr-sens", "input", (e) => {
+                const val = +e.target.value;
+                em.probeSensitivity = val;
+                $("pr-sens-v").innerText = val.toFixed(2);
+                if (IS_REALTIME_AUDIO && REALTIME_GAIN && AUDIO_CONTEXT) {
+                     REALTIME_GAIN.gain.setValueAtTime(0.5 * val, AUDIO_CONTEXT.currentTime);
+                }
+            });
+
+        } else {
+            probeControls.style.display = 'none';
+            emitterControls.style.display = 'block';
+            toggleBtn.textContent = 'Set as Probe';
+            toggleBtn.classList.add('probe-active');
+            audioBtn.style.display = 'none';
+            
+            if (ACTIVE_PROBE_ID === selectedEmitterId) {
+                ACTIVE_PROBE_ID = null;
+                $("probe-menu").style.display = 'none';
+                stopAudio();
+                stopRealtimeAudio();
+            }
+            
+            $("em-shp").value = em.shp;
+            $("em-geo").value = em.geo || "POINT";
+            $("em-st").value = em.st;
+            $("i-em-rt").value = em.rt;
+            $("i-em-of").value = em.off;
+            $("em-st-v").innerText = em.st.toFixed(1);
+            $("em-rt-v").innerText = em.rt;
+            $("em-of-v").innerText = em.off;
+        }
+        
+        const prRad = $("pr-rad");
+        if (prRad) prRad.classList.add("custom-drag-slider");
+        const prSens = $("pr-sens");
+        if (prSens) prSens.classList.add("custom-drag-slider");
+        
+        syncE();
+        updateProbeMenuInfo();
+    }
+    
+    function updateValveInspector() {
+        const menu = $("valve-menu");
+        const emitMenu = $("emit-menu");
+        
+        if (!selectedValveId) {
+            menu.style.display = "none";
+            editValveId = null;
+            return;
+        }
+        
+        const valve = VALVES.find((x) => x.id === selectedValveId);
+        if (!valve) {
+            selectedValveId = null;
+            menu.style.display = "none";
+            editValveId = null;
+            return;
+        }
+
+        editValveId = valve.id;
+        menu.style.display = "block";
+        emitMenu.style.display = "none";
+        selectedEmitterId = null;
+
+        $("v-key").value = valve.key;
+        $("v-rad").value = valve.radius;
+        $("v-closed").value = valve.closedDensity;
+        $("v-open").value = valve.openDensity;
+        
+        $("v-rad-v").innerText = valve.radius;
+        $("v-closed-v").innerText = valve.closedDensity.toFixed(2);
+        $("v-open-v").innerText = valve.openDensity.toFixed(2);
+        
+        $("v-state").innerText = valve.isKeyPressed ? 'OPEN' : 'CLOSED';
+        $("v-state").style.color = valve.isKeyPressed ? 'var(--color-valve-open)' : 'var(--color-text)';
+
+        EV("v-rad", "input", (e) => {
             const val = +e.target.value;
-            em.probeRadius = val;
-            $("pr-rad-v").innerText = val;
+            valve.radius = val;
+            $("v-rad-v").innerText = val;
             syncE();
         });
-        EV("pr-sens", "input", (e) => {
+        EV("v-closed", "input", (e) => {
             const val = +e.target.value;
-            em.probeSensitivity = val;
-            $("pr-sens-v").innerText = val.toFixed(2);
-            // NEW: Update Realtime Gain if live mode is active
-            if (IS_REALTIME_AUDIO && REALTIME_GAIN && AUDIO_CONTEXT) {
-                 REALTIME_GAIN.gain.setValueAtTime(0.5 * val, AUDIO_CONTEXT.currentTime);
-            }
+            valve.closedDensity = val;
+            $("v-closed-v").innerText = val.toFixed(2);
         });
+        EV("v-open", "input", (e) => {
+            const val = +e.target.value;
+            valve.openDensity = val;
+            $("v-open-v").innerText = val.toFixed(2);
+        });
+        
+        const vRad = $("v-rad");
+        if (vRad) vRad.classList.add("custom-drag-slider");
+        const vClosed = $("v-closed");
+        if (vClosed) vClosed.classList.add("custom-drag-slider");
+        const vOpen = $("v-open");
+        if (vOpen) vOpen.classList.add("custom-drag-slider");
+        
+        $("v-key").onkeydown = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.code) {
+                valve.key = e.code;
+                $("v-key").value = e.code;
+                $("v-key").blur();
+            }
+        };
 
-    } else {
-        probeControls.style.display = 'none';
-        emitterControls.style.display = 'block';
-        toggleBtn.textContent = 'Set as Probe';
-        toggleBtn.classList.add('probe-active');
-        audioBtn.style.display = 'none';
-        
-        if (ACTIVE_PROBE_ID === selectedEmitterId) {
-            ACTIVE_PROBE_ID = null;
-            $("probe-menu").style.display = 'none';
-            stopAudio();
-            stopRealtimeAudio();
-        }
-        
-        $("em-shp").value = em.shp;
-        $("em-geo").value = em.geo || "POINT";
-        $("em-st").value = em.st;
-        $("i-em-rt").value = em.rt;
-        $("i-em-of").value = em.off;
-        $("em-st-v").innerText = em.st.toFixed(1);
-        $("em-rt-v").innerText = em.rt;
-        $("em-of-v").innerText = em.off;
+        syncE();
     }
-    
-    const prRad = $("pr-rad");
-    if (prRad) prRad.classList.add("custom-drag-slider");
-    const prSens = $("pr-sens");
-    if (prSens) prSens.classList.add("custom-drag-slider");
-    
-    syncE();
-    updateProbeMenuInfo();
-}
       
       function updateProbeMenuInfo() {
           const em = emits.find((x) => x.id === ACTIVE_PROBE_ID);
@@ -4560,6 +4792,14 @@ function initData(keepGlobalDen = false) {
               <b>Current Signal:</b> ${currentVal}<br>
               <b>Max Signal Amplitude:</b> ${maxValClamped}
           `;
+      }
+      
+      function updateValveMenuInfo() {
+          const valve = VALVES.find((x) => x.id === selectedValveId);
+          if (valve) {
+              $("v-state").innerText = valve.isKeyPressed ? 'OPEN' : 'CLOSED';
+              $("v-state").style.color = valve.isKeyPressed ? 'var(--color-valve-open)' : 'var(--color-text)';
+          }
       }
       
       function updateMarkers(el) {
@@ -4596,7 +4836,6 @@ function initData(keepGlobalDen = false) {
           renderProbeGraph(PROBE_HISTORY, maxAbs);
           
           if (IS_AUDIO_PLAYING) {
-              // If audio is playing and markers are moved, stop playback to prevent glitches
               stopAudio();
           }
       }
@@ -4643,6 +4882,36 @@ function initData(keepGlobalDen = false) {
           }
         }
       }
+
+			function deleteSelectedValve() {
+    if (selectedValveId) {
+      const idx = VALVES.findIndex((v) => v.id === selectedValveId);
+      if (idx !== -1) {
+        const valve = VALVES[idx];
+        
+        const N = GRID;
+        const HALF_SIZE = valve.radius;
+        const den_arr = den[valve.lIdx];
+        
+        for (let r = -HALF_SIZE; r <= HALF_SIZE; r++) {
+            for (let c = -HALF_SIZE; c <= HALF_SIZE; c++) {
+                const rr = valve.i + r;
+                const cc = valve.j + c;
+                if (rr >= 0 && rr < N && cc >= 0 && cc < N) {
+                    const index = rr * N + cc;
+                    den_arr[index] = 0.0;
+                }
+            }
+        }
+        
+        VALVES.splice(idx, 1);
+        selectedValveId = null;
+        updateValveInspector();
+        syncE();
+        syncM();
+      }
+    }
+}
 
       function renderVolGradientControls() {
         const d = $("vol-gradient-stops");
@@ -4726,10 +4995,24 @@ function initData(keepGlobalDen = false) {
         const d = $("dynamic-brush-controls");
         let content = "";
 
-        if (brush !== "EMITTER_PLACE" && brush !== "SDF_PLACE") {
+        if (brush !== "EMITTER_PLACE" && brush !== "VALVE_PLACE" && brush !== "SDF_PLACE") {
           content += `<label>Brush Radius: <span id="l-rad" class="value-label">${mRad}</span></label><input type="range" id="i-rad" min="1" max="50" value="${mRad}"><label>Brush Hardness (Falloff Edge): <span id="l-hnd" class="value-label">${brushHnd.toFixed(
             1,
           )}</span></label><input type="range" id="i-hnd" min="0.0" max="1.0" value="${brushHnd}" step="0.1">`;
+        }
+        
+        if (brush === "VALVE_PLACE") {
+            const valveControls = `
+                <h4 style="margin-top: 10px;">Valve Creation Defaults</h4>
+                <label>Default Radius: <span id="l-vrad-def" class="value-label">${BASE_VALVE_CFG.radius}</span></label>
+                <input type="range" id="i-vrad-def" min="1" max="30" value="${BASE_VALVE_CFG.radius}" step="1">
+                <label>Default Key: <span id="l-vkey-def" class="value-label">${BASE_VALVE_CFG.key}</span></label>
+                <label>Closed Density: <span id="l-vclosed-def" class="value-label">${BASE_VALVE_CFG.closedDensity.toFixed(2)}</span></label>
+                <input type="range" id="i-vclosed-def" min="0.0" max="1.0" value="${BASE_VALVE_CFG.closedDensity}" step="0.01">
+                <label>Open Density: <span id="l-vopen-def" class="value-label">${BASE_VALVE_CFG.openDensity.toFixed(2)}</span></label>
+                <input type="range" id="i-vopen-def" min="0.0" max="1.0" value="${BASE_VALVE_CFG.openDensity}" step="0.01">
+            `;
+            content += valveControls;
         }
 
         if (brush === "DISTURBANCE") {
@@ -4845,6 +5128,31 @@ function initData(keepGlobalDen = false) {
           $("i-den-mode").onchange = (e) => {
             DEN_BRUSH_MODE = e.target.value;
           };
+        }
+        
+        const iVradDef = $("i-vrad-def");
+        if (iVradDef) {
+            iVradDef.classList.add("custom-drag-slider");
+            iVradDef.oninput = (e) => {
+                BASE_VALVE_CFG.radius = +e.target.value;
+                $("l-vrad-def").innerText = BASE_VALVE_CFG.radius;
+            };
+        }
+        const iVclosedDef = $("i-vclosed-def");
+        if (iVclosedDef) {
+            iVclosedDef.classList.add("custom-drag-slider");
+            iVclosedDef.oninput = (e) => {
+                BASE_VALVE_CFG.closedDensity = +e.target.value;
+                $("l-vclosed-def").innerText = BASE_VALVE_CFG.closedDensity.toFixed(2);
+            };
+        }
+        const iVopenDef = $("i-vopen-def");
+        if (iVopenDef) {
+            iVopenDef.classList.add("custom-drag-slider");
+            iVopenDef.oninput = (e) => {
+                BASE_VALVE_CFG.openDensity = +e.target.value;
+                $("l-vopen-def").innerText = BASE_VALVE_CFG.openDensity.toFixed(2);
+            };
         }
       }
 
@@ -5500,7 +5808,7 @@ const rateSlider = linkDiv.querySelector('.coupling-rate-slider');
           });
       }
 
-      function setupGlobalEvents() {
+      function setupEmitMenuDrag() {
         const emitMenu = $("emit-menu");
         let isDraggingEmitMenu = false;
         let startX, startY, startLeft, startTop;
@@ -5549,235 +5857,510 @@ const rateSlider = linkDiv.querySelector('.coupling-rate-slider');
             emitMenu.style.cursor = "grab";
           }
         });
+      }
+      
+      function setupValveMenuDrag() {
+        const valveMenu = $("valve-menu");
+        let isDraggingValveMenu = false;
+        let startX, startY, startLeft, startTop;
 
-        window.addEventListener("keydown", (e) => {
-          if (e.key === "F3") {
-            e.preventDefault();
-            document.body.classList.toggle("cinematic-mode");
-            onResize();
-          }
+        valveMenu.onmousedown = (e) => {
           if (
-            (e.key === "Delete" || e.key === "Backspace") &&
-            selectedEmitterId
+            e.target.tagName !== "INPUT" &&
+            e.target.tagName !== "SELECT" &&
+            e.target.tagName !== "BUTTON"
           ) {
-            e.preventDefault();
-            deleteSelectedEmitter();
-          }
-        });
-
-        document.getElementById("sidebar").addEventListener("click", (e) => {
-          const header = e.target.closest(".expandable-header");
-          if (header) {
-            if (
-              e.target.tagName === "INPUT" ||
-              e.target.tagName === "SELECT" ||
-              e.target.tagName === "BUTTON"
-            ) {
-              return;
-            }
-            toggleExpand(header);
-            e.preventDefault();
+            isDraggingValveMenu = true;
+            startX = e.clientX;
+            startY = e.clientY;
+            const rect = valveMenu.getBoundingClientRect();
+            startLeft = rect.left;
+            startTop = rect.top;
+            valveMenu.style.cursor = "grabbing";
             e.stopPropagation();
           }
+        };
+
+        window.addEventListener("mousemove", (e) => {
+          if (!isDraggingValveMenu) return;
+          const dx = e.clientX - startX;
+          const dy = e.clientY - startY;
+
+          let newLeft = startLeft + dx;
+          let newTop = startTop + dy;
+
+          newLeft = Math.max(
+            0,
+            Math.min(window.innerWidth - valveMenu.offsetWidth, newLeft),
+          );
+          newTop = Math.max(
+            $("top-toolbar").offsetHeight,
+            Math.min(window.innerHeight - valveMenu.offsetHeight, newTop),
+          );
+
+          valveMenu.style.left = `${newLeft}px`;
+          valveMenu.style.top = `${newTop}px`;
         });
 
-        document
-          .getElementById("sidebar")
-          .addEventListener("mousedown", (e) => {
-            if (
-              e.target.tagName !== "INPUT" &&
-              e.target.tagName !== "SELECT" &&
-              e.target.tagName !== "TEXTAREA" &&
-              e.target.tagName !== "BUTTON"
-            ) {
-              e.stopPropagation();
-            }
-          });
-
-        EV("btn-toggle-ui", "click", () => {
-          document.body.classList.toggle("cinematic-mode");
-          if (document.body.classList.contains("cinematic-mode")) {
-            $("emit-menu").style.display = "none";
-            $("sdf-menu").style.display = "none";
-            $("probe-menu").style.display = "none";
-            stopRealtimeAudio();
+        window.addEventListener("mouseup", () => {
+          if (isDraggingValveMenu) {
+            isDraggingValveMenu = false;
+            valveMenu.style.cursor = "grab";
           }
-          onResize();
+        });
+      }
+let customSliderHandleMouseMove;
+      let customSliderHandleMouseUp;
+
+      function setupCustomSliderDrag() {
+        const sliders = document.querySelectorAll('input[type="range"]');
+        sliders.forEach((slider) => {
+          slider.classList.add("custom-drag-slider");
         });
 
-        EV("btn-toggle-play", "click", togglePlayPause);
-        EV("btn-clear", "click", clearSimulation);
-        EV("btn-reset-density", "click", resetDensity);
-        EV("btn-reset-settings", "click", resetViewSettings);
-        EV("btn-full-reset", "click", () =>
-          fullResetConfig(DEFAULT_STATE_CONFIG),
-        );
-        EV("btn-add", "click", addLayer);
-        EV("btn-rem", "click", removeLayer);
+        let activeSlider = null;
+        let startX = 0;
+        let startValue = 0;
+        const sensitivity = 250;
 
-        EV("btn-cam-top", "click", () => setCameraView(45, 1, 60));
-        EV("btn-cam-left", "click", () => setCameraView(135, 60, 60));
-        EV("btn-cam-right", "click", () => setCameraView(315, 60, 60));
-        EV("btn-cam-bottom", "click", () => setCameraView(45, 179, 60));
-        EV("i-dt", "input", updateSimControls);
-        EV("i-vis", "input", updateSimControls);
+        const updateSliderValue = (e) => {
+          if (!activeSlider) return;
 
-        EV("btn-save-preset", "click", savePresetFile);
-        EV("btn-load-preset", "click", loadPresetFile);
+          const min = parseFloat(activeSlider.min || 0);
+          const max = parseFloat(activeSlider.max || 1);
+          const step = parseFloat(activeSlider.step || 0.01);
+          const range = max - min;
 
-        EV("btn-save-formula", "click", saveFormulaFile);
-        EV("btn-load-formula", "click", loadFormulaFile);
-        EV("btn-test-formula", "click", updateCustomFormula);
-        EV("custom-name", "input", updateCustomFormula);
-        EV("custom-vars", "input", updateCustomFormula);
-        EV("custom-code", "input", updateCustomFormula);
+          const dx = e.clientX - startX;
+          const valueChange = (dx / sensitivity) * range;
 
-        EV("btn-add-coupling", "click", addCouplingLink);
+          let newValue = startValue + valueChange;
 
-        const btnVol = $("btn-vol");
-        if (btnVol)
-          btnVol.onclick = () => {
-            IS_3D_MODE = true;
-            VOL_LAYERS = +$("i-vd").value;
-            fullResetConfig({
-              global: {
-                ...DEFAULT_STATE_CONFIG.global,
-                IS_3D_MODE: true,
-                VOL_LAYERS: VOL_LAYERS,
-              },
-              layers: [],
-              emits: [],
-            });
-            updateUI();
-          };
-        const btnExitVol = $("btn-exit-vol");
-        if (btnExitVol)
-          btnExitVol.onclick = () => {
-            IS_3D_MODE = false;
-            fullResetConfig({
-              global: {
-                ...DEFAULT_STATE_CONFIG.global,
-                IS_3D_MODE: false,
-                VOL_LAYERS: 40,
-              },
-              layers: DEFAULT_STATE_CONFIG.layers,
-              emits: [],
-            });
-            updateUI();
-          };
-          
-        EV("em-probe-toggle", "click", toggleEmitterProbe);
-        EV("em-audio-btn", "click", () => {
-            const menu = $("probe-menu");
-            menu.style.display = 'block';
-            updateProbeMenuUI();
-            updateProbeMenuInfo();
-        });
-        
-        EV("probe-close-btn", "click", () => {
-            $("probe-menu").style.display = 'none';
-            stopAudio();
-        });
-        
-        EV("cb-probe-loop", "change", (e) => {
-            IS_LOOPING = e.target.checked;
-            // If live mode is active, we don't care about audio clip playback loop
-            if (IS_AUDIO_PLAYING) stopAudio();
-        });
+          newValue = Math.max(min, Math.min(max, newValue));
 
-        EV("probe-save-wav", "click", () => {
-            const maxAmp = PROBE_HISTORY.reduce((max, val) => Math.max(max, Math.abs(val)), 0);
-            saveWavFile(PROBE_HISTORY, PROBE_SAMPLE_RATE, maxAmp);
-        });
-        
-        EV("probe-hist-len", "input", (e) => {
-            PROBE_HISTORY_LENGTH = +e.target.value;
-            $('probe-hist-v').innerText = PROBE_HISTORY_LENGTH;
-            while (PROBE_HISTORY.length > PROBE_HISTORY_LENGTH) {
-                PROBE_HISTORY.shift();
-            }
-            updateProbeMenuUI();
-            if (IS_AUDIO_PLAYING) stopAudio();
-        });
-        
-        EV("probe-sample-rate", "input", (e) => {
-            PROBE_SAMPLE_RATE = +e.target.value;
-            $('probe-sr-v').innerText = PROBE_SAMPLE_RATE;
-            setupAudio();
-            if (IS_AUDIO_PLAYING) stopAudio();
-            if (IS_REALTIME_AUDIO) stopRealtimeAudio();
-        });
-        
-        EV("probe-play-btn", "click", () => {
-            if (IS_AUDIO_PLAYING) {
-                stopAudio();
-                return;
-            }
-            if (PROBE_HISTORY.length === 0) {
-                console.error("Cannot play audio: Probe history is empty."); 
-                return;
-            }
-            stopRealtimeAudio();
-            const maxAmp = PROBE_HISTORY.reduce((max, val) => Math.max(max, Math.abs(val)), 0);
-            playAudio(PROBE_HISTORY, PROBE_SAMPLE_RATE, maxAmp);
-        });
+          newValue = Math.round(newValue / step) * step;
 
-        EV("probe-live-btn", "click", () => {
-            if (IS_REALTIME_AUDIO) {
-                stopRealtimeAudio();
-            } else {
-                if (!ACTIVE_PROBE_ID) {
-                    console.error("Cannot start live mode: No probe selected or active.");
-                    return;
-                }
-                startRealtimeAudio();
-            }
-        });
-        
-        const startMarkerEl = $('probe-start-marker');
-        const endMarkerEl = $('probe-end-marker');
-        if (startMarkerEl && endMarkerEl) {
-            startMarkerEl.oninput = () => updateMarkers(startMarkerEl);
-            endMarkerEl.oninput = () => updateMarkers(endMarkerEl);
-        }
+          activeSlider.value = newValue;
 
-        EV("em-st", "input", (e) => {
-          $("em-st-v").innerText = (+e.target.value).toFixed(1);
-          const em = emits.find((x) => x.id === editEmitId);
-          if (em) em.st = +e.target.value;
-        });
-        EV("i-em-rt", "input", (e) => {
-          $("em-rt-v").innerText = e.target.value;
-          const em = emits.find((x) => x.id === editEmitId);
-          if (em) em.rt = +e.target.value;
-        });
-        EV("i-em-of", "input", (e) => {
-          $("em-of-v").innerText = e.target.value;
-          const em = emits.find((x) => x.id === editEmitId);
-          if (em) em.off = +e.target.value;
-        });
-        EV("em-shp", "change", (e) => {
-          const em = emits.find((x) => x.id === editEmitId);
-          if (em) em.shp = e.target.value;
-        });
-        EV("em-geo", "change", (e) => {
-          const em = emits.find((x) => x.id === editEmitId);
-          if (em) em.geo = e.target.value;
-          syncE();
-        });
-        EV("em-del-btn", "click", deleteSelectedEmitter);
-        EV("em-close", "click", () => {
-          selectedEmitterId = null;
-          updateEmitterInspector();
-          syncE();
-        });
+          const event = new Event("input", { bubbles: true });
+          activeSlider.dispatchEvent(event);
+        };
 
-        setupSDFMenuHandlers();
-        setupSDFMenuDrag();
-        setupProbeMenuDrag();
+        customSliderHandleMouseMove = (e) => {
+          e.preventDefault();
+          if (activeSlider) {
+            updateSliderValue(e);
+          }
+        };
+
+        customSliderHandleMouseUp = () => {
+          if (activeSlider) {
+            const changeEvent = new Event("change", { bubbles: true });
+            activeSlider.dispatchEvent(changeEvent);
+            activeSlider = null;
+            document.body.style.cursor = "default";
+          }
+          window.removeEventListener("mousemove", customSliderHandleMouseMove);
+          window.removeEventListener("mouseup", customSliderHandleMouseUp);
+        };
+
+        const handleMouseDown = (e) => {
+          if (e.target.tagName !== "INPUT" || e.target.type !== "range") return;
+
+          if (e.target.classList.contains("custom-drag-slider")) {
+            activeSlider = e.target;
+            startX = e.clientX;
+            startValue = parseFloat(activeSlider.value);
+
+            document.body.style.cursor = "ew-resize";
+            window.addEventListener("mousemove", customSliderHandleMouseMove);
+            window.addEventListener("mouseup", customSliderHandleMouseUp);
+            e.preventDefault();
+          } else {
+            activeSlider = null;
+          }
+        };
+
+        document.querySelectorAll(".custom-drag-slider").forEach((slider) => {
+          slider.removeEventListener("mousedown", handleMouseDown);
+          slider.addEventListener("mousedown", handleMouseDown);
+        });
       }
 
-      var updVis = () => {
+function setupScene() {
+        canvasContainer = $("canvas-container");
+        const W = canvasContainer.clientWidth;
+        const H = canvasContainer.clientHeight;
+        scene = new THREE.Scene();
+        scene.fog = new THREE.Fog(0x1a1d21, 50, 150);
+        camera = new THREE.PerspectiveCamera(75, W / H, 0.1, 1000);
+        TGT.set(0, 0, 0);
+        updCam();
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(W, H);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.sortObjects = false;
+        canvasContainer.appendChild(renderer.domElement);
+        raycaster = new THREE.Raycaster();
+        raycaster.layers.set(0);
+        scene.add(new THREE.AmbientLight(0x404040));
+        scene.add(new THREE.DirectionalLight(0xffffff, 0.6));
+        window.addEventListener("resize", onResize, false);
+
+        canvasContainer.addEventListener("mousedown", (e) => {
+          if (e.button === 2) {
+            isOrbit = true;
+            mX = e.clientX;
+            mY = e.clientY;
+            return;
+          }
+          if (e.button === 1 || e.shiftKey) {
+            isOrbit = true;
+            mX = e.clientX;
+            mY = e.clientY;
+            return;
+          }
+
+          const hit = cast(e);
+
+          const isEmitterMode = brush === "EMITTER_PLACE";
+          const isValveMode = brush === "VALVE_PLACE";
+          const isEmitterHit = hit && hit.type !== "VALVE" && hit.obj && hit.obj.userData.eid && hit.obj.userData.part !== "RING";
+          const isValveHit = hit && hit.type === "VALVE" && hit.obj && hit.obj.userData.eid;
+          
+          if (isEmitterHit) {
+            selectedEmitterId = hit.obj.userData.eid;
+            selectedValveId = null;
+            actEmitPart = hit.obj.userData.part;
+            updateEmitterInspector();
+            updateValveInspector();
+            syncE();
+
+            isDrag = true;
+
+            const emitterMesh = emitMeshes.find(
+              (m) =>
+                m.userData.eid === selectedEmitterId &&
+                m.userData.part === actEmitPart,
+            );
+
+            if (emitterMesh) {
+              if (!IS_3D_MODE) {
+                dragPlane.setComponents(0, -1, 0, emitterMesh.position.y);
+              } else {
+                setupDragPlane(emitterMesh, hit.point, e);
+              }
+
+              const mouse = nm(e);
+              raycaster.setFromCamera(mouse, camera);
+              let planeHit = new THREE.Vector3();
+              if (raycaster.ray.intersectPlane(dragPlane, planeHit)) {
+                dragStartOffset.subVectors(planeHit, emitterMesh.position);
+              } else {
+                dragStartOffset.set(0, 0, 0);
+              }
+            }
+            return;
+          }
+          
+          if (isValveHit) {
+            selectedValveId = hit.obj.userData.eid;
+            selectedEmitterId = null;
+            updateValveInspector();
+            updateEmitterInspector();
+            syncE();
+
+            isDrag = true;
+            const valveMesh = emitMeshes.find(
+                (m) => m.userData.eid === selectedValveId && m.userData.type === "VALVE",
+            );
+            
+            if (valveMesh) {
+                if (!IS_3D_MODE) {
+                    dragPlane.setComponents(0, -1, 0, valveMesh.position.y);
+                } else {
+                    setupDragPlane(valveMesh, hit.point, e);
+                }
+                const mouse = nm(e);
+                raycaster.setFromCamera(mouse, camera);
+                let planeHit = new THREE.Vector3();
+                if (raycaster.ray.intersectPlane(dragPlane, planeHit)) {
+                    dragStartOffset.subVectors(planeHit, valveMesh.position);
+                } else {
+                    dragStartOffset.set(0, 0, 0);
+                }
+            }
+            return;
+          }
+
+          if (selectedEmitterId) {
+            selectedEmitterId = null;
+            updateEmitterInspector();
+            syncE();
+          }
+          if (selectedValveId) {
+            selectedValveId = null;
+            updateValveInspector();
+            syncE();
+          }
+
+          if (e.button === 0) {
+            if (
+              brush === "SDF_PLACE" &&
+              hit &&
+              $("sdf-menu").style.display === "block"
+            ) {
+              let i = hit.i,
+                j = hit.j;
+              let lIdx =
+                hit.lIdx !== undefined
+                  ? hit.lIdx
+                  : layers.findIndex((l) => l.intr) || 0;
+              if (IS_3D_MODE) {
+                i = GRID / 2;
+                j = GRID / 2;
+              }
+              placeShape(i, j, lIdx);
+              return;
+            }
+
+            if (brush === "DISTURBANCE" && hit && hit.point) {
+              pulseStartTime = TIME;
+              interact(hit.i, hit.j, hit.lIdx);
+              activeBrushHit = hit;
+              isContinuousBrushActive = true;
+              isDrag = true;
+            } else if (brush === "DENSITY_PAINT" && hit && hit.point) {
+              const targetLIdx = hit.lIdx !== undefined ? hit.lIdx : -1;
+              interact(hit.i, hit.j, targetLIdx);
+              isContinuousBrushActive = true;
+              isDrag = true;
+              activeBrushHit = { i: hit.i, j: hit.j, lIdx: targetLIdx };
+            } else if (brush === "EMITTER_PLACE" || brush === "VALVE_PLACE") {
+              if (!hit) return;
+
+              let targetLIdx = IS_3D_MODE
+                ? Math.floor(layers.length / 2)
+                : hit.lIdx;
+              let startI = hit.i;
+              let startJ = hit.j;
+              if (IS_3D_MODE) {
+                startI = GRID / 2;
+                startJ = GRID / 2;
+              }
+
+              if (brush === "VALVE_PLACE") {
+                  const newValve = {
+                      ...BASE_VALVE_CFG,
+                      id: Date.now() + Math.random(),
+                      i: startI,
+                      j: startJ,
+                      lIdx: targetLIdx,
+                      isKeyPressed: false,
+                  };
+                  VALVES.push(newValve);
+                  selectedValveId = newValve.id;
+                  updateValveInspector();
+                  syncM();
+              } else {
+                  emits.push({
+                    ...BASE_PROBE_CFG,
+                    id: Date.now(),
+                    type: "EMITTER_LINE_DRAG",
+                    shp: $("em-shp").value,
+                    st: parseFloat($("em-st").value),
+                    rt: parseFloat($("i-em-rt").value),
+                    off: parseFloat($("i-em-of").value),
+                    geo: "POINT",
+                    i: startI,
+                    j: startJ,
+                    lIdx: targetLIdx,
+                    i2: startI,
+                    j2: startJ,
+                  });
+
+                  selectedEmitterId = emits[emits.length - 1].id;
+                  actEmitPart = "BODY";
+                  updateEmitterInspector();
+              }
+
+              syncE();
+              isDrag = true;
+
+              const newMesh = emitMeshes.find(
+                (m) => m.userData.eid === (selectedEmitterId || selectedValveId),
+              );
+              if (newMesh && !IS_3D_MODE) {
+                dragPlane.setComponents(0, -1, 0, newMesh.position.y);
+                dragStartOffset.set(0, 0, 0);
+              }
+            }
+          }
+        });
+
+        canvasContainer.addEventListener("mousemove", (e) => {
+          const dx = e.clientX - mX;
+          const dy = e.clientY - mY;
+          mX = e.clientX;
+          mY = e.clientY;
+
+          if (isOrbit) {
+            theta -= dx * 0.5;
+            phi -= dy * 0.5;
+            updCam();
+            return;
+          }
+
+          if (!isDrag && brush !== "SDF_PLACE") return;
+
+          const hit = cast(e);
+
+          if (
+            brush === "SDF_PLACE" &&
+            $("sdf-menu").style.display === "block"
+          ) {
+            if (hit && !IS_3D_MODE) {
+              sdfPlacementGrid = { i: hit.i, j: hit.j, lIdx: hit.lIdx };
+            } else if (IS_3D_MODE) {
+              sdfPlacementGrid = {
+                i: GRID / 2,
+                j: GRID / 2,
+                lIdx: Math.floor(layers.length / 2),
+              };
+            }
+            updateStampPreview();
+          }
+
+          if (isDrag && (selectedEmitterId || selectedValveId)) {
+            const isEmitter = !!selectedEmitterId;
+            const item = isEmitter ? emits.find((x) => x.id === selectedEmitterId) : VALVES.find((x) => x.id === selectedValveId);
+            if (!item) return;
+
+            const mouse = nm(e);
+            raycaster.setFromCamera(mouse, camera);
+
+            let newPos = new THREE.Vector3();
+            const intersection = raycaster.ray.intersectPlane(
+              dragPlane,
+              newPos,
+            );
+
+            if (intersection) {
+              newPos.sub(dragStartOffset);
+
+              const layerSpacing = getLayerSpacing();
+              const worldToGrid = getWorldToGridScale();
+              const totalHeight = (layers.length - 1) * layerSpacing;
+              const centerYOffset = IS_3D_MODE ? totalHeight / 2 : 0;
+
+              const gridI = Math.min(
+                GRID - 1,
+                Math.max(0, ((newPos.z + 25) / 50) * GRID) | 0,
+              );
+              const gridJ = Math.min(
+                GRID - 1,
+                Math.max(0, ((newPos.x + 25) / 50) * GRID) | 0,
+              );
+
+              let newLIdx = item.lIdx;
+              if (IS_3D_MODE) {
+                newLIdx = Math.round(
+                  (centerYOffset - newPos.y) * worldToGrid.y,
+                );
+                newLIdx = Math.max(0, Math.min(layers.length - 1, newLIdx));
+              } else {
+                newLIdx = item.lIdx;
+              }
+
+              item.lIdx = newLIdx;
+              
+              if (isEmitter) {
+                  if (item.geo === "LINE" && !item.isProbe) {
+                    if (actEmitPart === "START") {
+                      item.i = gridI;
+                      item.j = gridJ;
+                    } else if (actEmitPart === "END") {
+                      item.i2 = gridI;
+                      item.j2 = gridJ;
+                    } else {
+                      const deltaI = gridI - (item.i + item.i2) / 2;
+                      const deltaJ = gridJ - (item.j + item.j2) / 2;
+
+                      item.i = Math.round(item.i + deltaI);
+                      item.j = Math.round(item.j + deltaJ);
+                      item.i2 = Math.round(item.i2 + deltaI);
+                      item.j2 = Math.round(item.j2 + deltaJ);
+                    }
+                  } else if (item.geo === "POINT" || item.isProbe) {
+                    item.i = gridI;
+                    item.j = gridJ;
+                    item.i2 = gridI;
+                    item.j2 = gridJ;
+                  }
+              } else { // Valve logic
+                  item.i = gridI;
+                  item.j = gridJ;
+              }
+
+              item.i = Math.max(0, Math.min(GRID - 1, item.i));
+              item.j = Math.max(0, Math.min(GRID - 1, item.j));
+              if (item.i2 !== undefined) {
+                item.i2 = Math.max(0, Math.min(GRID - 1, item.i2));
+                item.j2 = Math.max(0, Math.min(GRID - 1, item.j2));
+              }
+            }
+            syncE();
+          }
+
+          if (brush === "DISTURBANCE" || brush === "DENSITY_PAINT") {
+            if (hit && hit.point) {
+              const targetLIdx =
+                hit.lIdx !== undefined
+                  ? hit.lIdx
+                  : activeBrushHit
+                    ? activeBrushHit.lIdx
+                    : -1;
+              activeBrushHit = { i: hit.i, j: hit.j, lIdx: targetLIdx };
+            }
+          }
+        });
+
+        canvasContainer.addEventListener("mouseup", (e) => {
+          isOrbit = false;
+          isDrag = false;
+
+          if (e.button === 0) {
+            const lastEmIdx = emits.findIndex(
+              (e) => e.type === "EMITTER_LINE_DRAG",
+            );
+            if (lastEmIdx !== -1) {
+              emits[lastEmIdx].type = "EMITTER";
+              emits[lastEmIdx].geo = $("em-geo").value;
+              if (emits[lastEmIdx].geo === "POINT") {
+                emits[lastEmIdx].i2 = emits[lastEmIdx].i;
+                emits[lastEmIdx].j2 = emits[lastEmIdx].j;
+              }
+              selectedEmitterId = emits[lastEmIdx].id;
+              updateEmitterInspector();
+              syncE();
+            }
+          }
+          isContinuousBrushActive = false;
+          activeBrushHit = null;
+        });
+
+        canvasContainer.addEventListener(
+          "wheel",
+          (e) => {
+            e.preventDefault();
+            rad *= e.deltaY > 0 ? 1.1 : 0.9;
+            updCam();
+          },
+          { passive: false },
+        );
+      }
+
+var updVis = () => {
         visMin = parseFloat($("i-vis-min").value);
         visMax = parseFloat($("i-vis-max").value);
         if (visMin > visMax) {
@@ -5798,7 +6381,7 @@ const rateSlider = linkDiv.querySelector('.coupling-rate-slider');
         });
       };
 
-      function setupSliderListeners() {
+function setupSliderListeners() {
         $("i-res").onchange = (e) => {
           resizeSim(+e.target.value);
         };
@@ -5944,16 +6527,20 @@ const cbVolAbsorb = $("cb-vol-absorb");
         EV("i-gden-ref", "input", updateSimControls);
         EV("btn-reset-global-den", "click", resetGlobalDensity);
 
-        ["b-dist", "b-emit", "b-den", "b-sdf"].forEach((id) => {
+        ["b-dist", "b-emit", "b-valve", "b-den", "b-sdf"].forEach((id) => {
           const btn = $(id);
           btn.onclick = function () {
-            ["b-dist", "b-emit", "b-den", "b-sdf"].forEach(
+            ["b-dist", "b-emit", "b-valve", "b-den", "b-sdf"].forEach(
               (b) => ($(b).className = ""),
             );
             this.className = "active";
             brush = btn.dataset.brush;
             const isSDF = brush === "SDF_PLACE";
+            const isValve = brush === "VALVE_PLACE";
             $("sdf-menu").style.display = isSDF ? "block" : "none";
+            $("valve-menu").style.display = "none";
+            $("emit-menu").style.display = "none";
+
             if (isSDF) {
               updateSDFControls();
               renderSDFPreview();
@@ -5962,11 +6549,14 @@ const cbVolAbsorb = $("cb-vol-absorb");
               disposeMesh(stampPreviewMesh);
               stampPreviewMesh = null;
             }
-            if (id === "b-emit" || selectedEmitterId) {
-              if (id !== "b-emit") {
+
+            if (id !== "b-emit") {
                 selectedEmitterId = null;
                 updateEmitterInspector();
-              }
+            }
+            if (id !== "b-valve") {
+                selectedValveId = null;
+                updateValveInspector();
             }
 
             syncM();
@@ -5976,407 +6566,259 @@ const cbVolAbsorb = $("cb-vol-absorb");
         });
       }
 
-      let customSliderHandleMouseMove;
-      let customSliderHandleMouseUp;
+   function setupGlobalEvents() {
+        setupEmitMenuDrag();
+        setupValveMenuDrag();
 
-      function setupCustomSliderDrag() {
-        const sliders = document.querySelectorAll('input[type="range"]');
-        sliders.forEach((slider) => {
-          slider.classList.add("custom-drag-slider");
-        });
-
-        let activeSlider = null;
-        let startX = 0;
-        let startValue = 0;
-        const sensitivity = 250;
-
-        const updateSliderValue = (e) => {
-          if (!activeSlider) return;
-
-          const min = parseFloat(activeSlider.min || 0);
-          const max = parseFloat(activeSlider.max || 1);
-          const step = parseFloat(activeSlider.step || 0.01);
-          const range = max - min;
-
-          const dx = e.clientX - startX;
-          const valueChange = (dx / sensitivity) * range;
-
-          let newValue = startValue + valueChange;
-
-          newValue = Math.max(min, Math.min(max, newValue));
-
-          newValue = Math.round(newValue / step) * step;
-
-          activeSlider.value = newValue;
-
-          const event = new Event("input", { bubbles: true });
-          activeSlider.dispatchEvent(event);
-        };
-
-        customSliderHandleMouseMove = (e) => {
-          e.preventDefault();
-          if (activeSlider) {
-            updateSliderValue(e);
-          }
-        };
-
-        customSliderHandleMouseUp = () => {
-          if (activeSlider) {
-            const changeEvent = new Event("change", { bubbles: true });
-            activeSlider.dispatchEvent(changeEvent);
-            activeSlider = null;
-            document.body.style.cursor = "default";
-          }
-          window.removeEventListener("mousemove", customSliderHandleMouseMove);
-          window.removeEventListener("mouseup", customSliderHandleMouseUp);
-        };
-
-        const handleMouseDown = (e) => {
-          if (e.target.tagName !== "INPUT" || e.target.type !== "range") return;
-
-          if (e.target.classList.contains("custom-drag-slider")) {
-            activeSlider = e.target;
-            startX = e.clientX;
-            startValue = parseFloat(activeSlider.value);
-
-            document.body.style.cursor = "ew-resize";
-            window.addEventListener("mousemove", customSliderHandleMouseMove);
-            window.addEventListener("mouseup", customSliderHandleMouseUp);
+        window.addEventListener("keydown", (e) => {
+          if (e.key === "F3") {
             e.preventDefault();
-          } else {
-            activeSlider = null;
+            document.body.classList.toggle("cinematic-mode");
+            onResize();
           }
-        };
-
-        document.querySelectorAll(".custom-drag-slider").forEach((slider) => {
-          slider.removeEventListener("mousedown", handleMouseDown);
-          slider.addEventListener("mousedown", handleMouseDown);
+          if (
+            (e.key === "Delete" || e.key === "Backspace") &&
+            (selectedEmitterId || selectedValveId)
+          ) {
+            e.preventDefault();
+            if (selectedEmitterId) deleteSelectedEmitter();
+            if (selectedValveId) deleteSelectedValve();
+          }
+          
+          const valve = VALVES.find((v) => v.key === e.code);
+          if (valve && !valve.isKeyPressed) {
+              valve.isKeyPressed = true;
+              syncE();
+              if (valve.id === selectedValveId) updateValveMenuInfo();
+          }
         });
-      }
-      
-      function setupDragPlane(mesh, hitPoint, e) {
-          const mouse = nm(e);
-          raycaster.setFromCamera(mouse, camera);
-          const planeNormal = new THREE.Vector3().subVectors(camera.position, mesh.position).normalize();
-          dragPlane.setFromNormalAndCoplanarPoint(planeNormal, hitPoint);
-      }
 
-      function setupScene() {
-        canvasContainer = $("canvas-container");
-        const W = canvasContainer.clientWidth;
-        const H = canvasContainer.clientHeight;
-        scene = new THREE.Scene();
-        scene.fog = new THREE.Fog(0x1a1d21, 50, 150);
-        camera = new THREE.PerspectiveCamera(75, W / H, 0.1, 1000);
-        TGT.set(0, 0, 0);
-        updCam();
-        renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(W, H);
-        renderer.setPixelRatio(window.devicePixelRatio);
-        renderer.sortObjects = false;
-        canvasContainer.appendChild(renderer.domElement);
-        raycaster = new THREE.Raycaster();
-        raycaster.layers.set(0);
-        scene.add(new THREE.AmbientLight(0x404040));
-        scene.add(new THREE.DirectionalLight(0xffffff, 0.6));
-        window.addEventListener("resize", onResize, false);
-
-        canvasContainer.addEventListener("mousedown", (e) => {
-          if (e.button === 2) {
-            isOrbit = true;
-            mX = e.clientX;
-            mY = e.clientY;
-            return;
-          }
-          if (e.button === 1 || e.shiftKey) {
-            isOrbit = true;
-            mX = e.clientX;
-            mY = e.clientY;
-            return;
-          }
-
-          const hit = cast(e);
-
-          const isEmitterMode = brush === "EMITTER_PLACE";
-          const isEmitterHit =
-            isEmitterMode && hit && hit.obj && hit.obj.userData.eid && hit.obj.userData.part !== "RING";
-
-          if (isEmitterHit) {
-            selectedEmitterId = hit.obj.userData.eid;
-            actEmitPart = hit.obj.userData.part;
-            updateEmitterInspector();
-            syncE();
-
-            isDrag = true;
-
-            const emitterMesh = emitMeshes.find(
-              (m) =>
-                m.userData.eid === selectedEmitterId &&
-                m.userData.part === actEmitPart,
-            );
-
-            if (emitterMesh) {
-              if (!IS_3D_MODE) {
-                dragPlane.setComponents(0, -1, 0, emitterMesh.position.y);
-              } else {
-                setupDragPlane(emitterMesh, hit.point, e);
-              }
-
-              const mouse = nm(e);
-              raycaster.setFromCamera(mouse, camera);
-              let planeHit = new THREE.Vector3();
-              if (raycaster.ray.intersectPlane(dragPlane, planeHit)) {
-                dragStartOffset.subVectors(planeHit, emitterMesh.position);
-              } else {
-                dragStartOffset.set(0, 0, 0);
-              }
+        window.addEventListener("keyup", (e) => {
+            const valve = VALVES.find((v) => v.key === e.code);
+            if (valve && valve.isKeyPressed) {
+                valve.isKeyPressed = false;
+                syncE();
+                if (valve.id === selectedValveId) updateValveMenuInfo();
             }
-            return;
-          }
+        });
 
-          if (selectedEmitterId) {
-            selectedEmitterId = null;
-            updateEmitterInspector();
-            syncE();
-          }
-
-          if (e.button === 0) {
+        document.getElementById("sidebar").addEventListener("click", (e) => {
+          const header = e.target.closest(".expandable-header");
+          if (header) {
             if (
-              brush === "SDF_PLACE" &&
-              hit &&
-              $("sdf-menu").style.display === "block"
+              e.target.tagName === "INPUT" ||
+              e.target.tagName === "SELECT" ||
+              e.target.tagName === "BUTTON"
             ) {
-              let i = hit.i,
-                j = hit.j;
-              let lIdx =
-                hit.lIdx !== undefined
-                  ? hit.lIdx
-                  : layers.findIndex((l) => l.intr) || 0;
-              if (IS_3D_MODE) {
-                i = GRID / 2;
-                j = GRID / 2;
-              }
-              placeShape(i, j, lIdx);
               return;
             }
-
-            if (brush === "DISTURBANCE" && hit && hit.point) {
-              pulseStartTime = TIME;
-              interact(hit.i, hit.j, hit.lIdx);
-              activeBrushHit = hit;
-              isContinuousBrushActive = true;
-              isDrag = true;
-            } else if (brush === "DENSITY_PAINT" && hit && hit.point) {
-              const targetLIdx = hit.lIdx !== undefined ? hit.lIdx : -1;
-              interact(hit.i, hit.j, targetLIdx);
-              isContinuousBrushActive = true;
-              isDrag = true;
-              activeBrushHit = { i: hit.i, j: hit.j, lIdx: targetLIdx };
-            } else if (brush === "EMITTER_PLACE") {
-              if (!hit) return;
-
-              let targetLIdx = IS_3D_MODE
-                ? Math.floor(layers.length / 2)
-                : hit.lIdx;
-              let startI = hit.i;
-              let startJ = hit.j;
-              if (IS_3D_MODE) {
-                startI = GRID / 2;
-                startJ = GRID / 2;
-              }
-
-              emits.push({
-                ...BASE_PROBE_CFG,
-                id: Date.now(),
-                type: "EMITTER_LINE_DRAG",
-                shp: $("em-shp").value,
-                st: parseFloat($("em-st").value),
-                rt: parseFloat($("i-em-rt").value),
-                off: parseFloat($("i-em-of").value),
-                geo: "POINT",
-                i: startI,
-                j: startJ,
-                lIdx: targetLIdx,
-                i2: startI,
-                j2: startJ,
-              });
-
-              selectedEmitterId = emits[emits.length - 1].id;
-              actEmitPart = "BODY";
-              updateEmitterInspector();
-              syncE();
-              isDrag = true;
-
-              const newMesh = emitMeshes.find(
-                (m) => m.userData.eid === selectedEmitterId,
-              );
-              if (newMesh && !IS_3D_MODE) {
-                dragPlane.setComponents(0, -1, 0, newMesh.position.y);
-                dragStartOffset.set(0, 0, 0);
-              }
-            }
-          }
-        });
-
-        canvasContainer.addEventListener("mousemove", (e) => {
-          const dx = e.clientX - mX;
-          const dy = e.clientY - mY;
-          mX = e.clientX;
-          mY = e.clientY;
-
-          if (isOrbit) {
-            theta -= dx * 0.5;
-            phi -= dy * 0.5;
-            updCam();
-            return;
-          }
-
-          if (!isDrag && brush !== "SDF_PLACE") return;
-
-          const hit = cast(e);
-
-          if (
-            brush === "SDF_PLACE" &&
-            $("sdf-menu").style.display === "block"
-          ) {
-            if (hit && !IS_3D_MODE) {
-              sdfPlacementGrid = { i: hit.i, j: hit.j, lIdx: hit.lIdx };
-            } else if (IS_3D_MODE) {
-              sdfPlacementGrid = {
-                i: GRID / 2,
-                j: GRID / 2,
-                lIdx: Math.floor(layers.length / 2),
-              };
-            }
-            updateStampPreview();
-          }
-
-          if (
-            brush === "EMITTER_PLACE" &&
-            selectedEmitterId &&
-            editEmitId &&
-            isDrag
-          ) {
-            const em = emits.find((x) => x.id === editEmitId);
-            if (!em) return;
-
-            const mouse = nm(e);
-            raycaster.setFromCamera(mouse, camera);
-
-            let newPos = new THREE.Vector3();
-            const intersection = raycaster.ray.intersectPlane(
-              dragPlane,
-              newPos,
-            );
-
-            if (intersection) {
-              newPos.sub(dragStartOffset);
-
-              const layerSpacing = getLayerSpacing();
-              const worldToGrid = getWorldToGridScale();
-              const totalHeight = (layers.length - 1) * layerSpacing;
-              const centerYOffset = IS_3D_MODE ? totalHeight / 2 : 0;
-
-              const gridI = Math.min(
-                GRID - 1,
-                Math.max(0, ((newPos.z + 25) / 50) * GRID) | 0,
-              );
-              const gridJ = Math.min(
-                GRID - 1,
-                Math.max(0, ((newPos.x + 25) / 50) * GRID) | 0,
-              );
-
-              let newLIdx = em.lIdx;
-              if (IS_3D_MODE) {
-                newLIdx = Math.round(
-                  (centerYOffset - newPos.y) * worldToGrid.y,
-                );
-                newLIdx = Math.max(0, Math.min(layers.length - 1, newLIdx));
-              } else {
-                newLIdx = em.lIdx;
-              }
-
-              em.lIdx = newLIdx;
-
-              if (em.geo === "LINE" && !em.isProbe) {
-                if (actEmitPart === "START") {
-                  em.i = gridI;
-                  em.j = gridJ;
-                } else if (actEmitPart === "END") {
-                  em.i2 = gridI;
-                  em.j2 = gridJ;
-                } else {
-                  const deltaI = gridI - (em.i + em.i2) / 2;
-                  const deltaJ = gridJ - (em.j + em.j2) / 2;
-
-                  em.i = Math.round(em.i + deltaI);
-                  em.j = Math.round(em.j + deltaJ);
-                  em.i2 = Math.round(em.i2 + deltaI);
-                  em.j2 = Math.round(em.j2 + deltaJ);
-                }
-              } else if (em.geo === "POINT" || em.isProbe) {
-                em.i = gridI;
-                em.j = gridJ;
-                em.i2 = gridI;
-                em.j2 = gridJ;
-              }
-
-              em.i = Math.max(0, Math.min(GRID - 1, em.i));
-              em.j = Math.max(0, Math.min(GRID - 1, em.j));
-              if (em.i2 !== undefined) {
-                em.i2 = Math.max(0, Math.min(GRID - 1, em.i2));
-                em.j2 = Math.max(0, Math.min(GRID - 1, em.j2));
-              }
-            }
-            syncE();
-          }
-
-          if (brush === "DISTURBANCE" || brush === "DENSITY_PAINT") {
-            if (hit && hit.point) {
-              const targetLIdx =
-                hit.lIdx !== undefined
-                  ? hit.lIdx
-                  : activeBrushHit
-                    ? activeBrushHit.lIdx
-                    : -1;
-              activeBrushHit = { i: hit.i, j: hit.j, lIdx: targetLIdx };
-            }
-          }
-        });
-
-        canvasContainer.addEventListener("mouseup", (e) => {
-          isOrbit = false;
-          isDrag = false;
-
-          if (e.button === 0) {
-            const lastEmIdx = emits.findIndex(
-              (e) => e.type === "EMITTER_LINE_DRAG",
-            );
-            if (lastEmIdx !== -1) {
-              emits[lastEmIdx].type = "EMITTER";
-              emits[lastEmIdx].geo = $("em-geo").value;
-              if (emits[lastEmIdx].geo === "POINT") {
-                emits[lastEmIdx].i2 = emits[lastEmIdx].i;
-                emits[lastEmIdx].j2 = emits[lastEmIdx].j;
-              }
-              selectedEmitterId = emits[lastEmIdx].id;
-              updateEmitterInspector();
-              syncE();
-            }
-          }
-          isContinuousBrushActive = false;
-          activeBrushHit = null;
-        });
-
-        canvasContainer.addEventListener(
-          "wheel",
-          (e) => {
+            toggleExpand(header);
             e.preventDefault();
-            rad *= e.deltaY > 0 ? 1.1 : 0.9;
-            updCam();
-          },
-          { passive: false },
+            e.stopPropagation();
+          }
+        });
+
+        document
+          .getElementById("sidebar")
+          .addEventListener("mousedown", (e) => {
+            if (
+              e.target.tagName !== "INPUT" &&
+              e.target.tagName !== "SELECT" &&
+              e.target.tagName !== "TEXTAREA" &&
+              e.target.tagName !== "BUTTON"
+            ) {
+              e.stopPropagation();
+            }
+          });
+
+        EV("btn-toggle-ui", "click", () => {
+          document.body.classList.toggle("cinematic-mode");
+          if (document.body.classList.contains("cinematic-mode")) {
+            $("emit-menu").style.display = "none";
+            $("valve-menu").style.display = "none";
+            $("sdf-menu").style.display = "none";
+            $("probe-menu").style.display = "none";
+            stopRealtimeAudio();
+          }
+          onResize();
+        });
+
+        EV("btn-toggle-play", "click", togglePlayPause);
+        EV("btn-clear", "click", clearSimulation);
+        EV("btn-reset-density", "click", resetDensity);
+        EV("btn-reset-settings", "click", resetViewSettings);
+        EV("btn-full-reset", "click", () =>
+          fullResetConfig(DEFAULT_STATE_CONFIG),
         );
+        EV("btn-add", "click", addLayer);
+        EV("btn-rem", "click", removeLayer);
+
+        EV("btn-cam-top", "click", () => setCameraView(45, 1, 60));
+        EV("btn-cam-left", "click", () => setCameraView(135, 60, 60));
+        EV("btn-cam-right", "click", () => setCameraView(315, 60, 60));
+        EV("btn-cam-bottom", "click", () => setCameraView(45, 179, 60));
+        EV("i-dt", "input", updateSimControls);
+        EV("i-vis", "input", updateSimControls);
+
+        EV("btn-save-preset", "click", savePresetFile);
+        EV("btn-load-preset", "click", loadPresetFile);
+
+        EV("btn-save-formula", "click", saveFormulaFile);
+        EV("btn-load-formula", "click", loadFormulaFile);
+        EV("btn-test-formula", "click", updateCustomFormula);
+        EV("custom-name", "input", updateCustomFormula);
+        EV("custom-vars", "input", updateCustomFormula);
+        EV("custom-code", "input", updateCustomFormula);
+
+        EV("btn-add-coupling", "click", addCouplingLink);
+
+        const btnVol = $("btn-vol");
+        if (btnVol)
+          btnVol.onclick = () => {
+            IS_3D_MODE = true;
+            VOL_LAYERS = +$("i-vd").value;
+            fullResetConfig({
+              global: {
+                ...DEFAULT_STATE_CONFIG.global,
+                IS_3D_MODE: true,
+                VOL_LAYERS: VOL_LAYERS,
+              },
+              layers: [],
+              emits: [],
+            });
+            updateUI();
+          };
+        const btnExitVol = $("btn-exit-vol");
+        if (btnExitVol)
+          btnExitVol.onclick = () => {
+            IS_3D_MODE = false;
+            fullResetConfig({
+              global: {
+                ...DEFAULT_STATE_CONFIG.global,
+                IS_3D_MODE: false,
+                VOL_LAYERS: 40,
+              },
+              layers: DEFAULT_STATE_CONFIG.layers,
+              emits: [],
+            });
+            updateUI();
+          };
+          
+        EV("em-probe-toggle", "click", toggleEmitterProbe);
+        EV("em-audio-btn", "click", () => {
+            const menu = $("probe-menu");
+            menu.style.display = 'block';
+            updateProbeMenuUI();
+            updateProbeMenuInfo();
+        });
+        
+        EV("probe-close-btn", "click", () => {
+            $("probe-menu").style.display = 'none';
+            stopAudio();
+        });
+        
+        EV("v-del-btn", "click", deleteSelectedValve);
+        EV("v-close", "click", () => {
+            selectedValveId = null;
+            updateValveInspector();
+            syncE();
+        });
+        
+        EV("cb-probe-loop", "change", (e) => {
+            IS_LOOPING = e.target.checked;
+            if (IS_AUDIO_PLAYING) stopAudio();
+        });
+
+        EV("probe-save-wav", "click", () => {
+            const maxAmp = PROBE_HISTORY.reduce((max, val) => Math.max(max, Math.abs(val)), 0);
+            saveWavFile(PROBE_HISTORY, PROBE_SAMPLE_RATE, maxAmp);
+        });
+        
+        EV("probe-hist-len", "input", (e) => {
+            PROBE_HISTORY_LENGTH = +e.target.value;
+            $('probe-hist-v').innerText = PROBE_HISTORY_LENGTH;
+            while (PROBE_HISTORY.length > PROBE_HISTORY_LENGTH) {
+                PROBE_HISTORY.shift();
+            }
+            updateProbeMenuUI();
+            if (IS_AUDIO_PLAYING) stopAudio();
+        });
+        
+        EV("probe-sample-rate", "input", (e) => {
+            PROBE_SAMPLE_RATE = +e.target.value;
+            $('probe-sr-v').innerText = PROBE_SAMPLE_RATE;
+            setupAudio();
+            if (IS_AUDIO_PLAYING) stopAudio();
+            if (IS_REALTIME_AUDIO) stopRealtimeAudio();
+        });
+        
+        EV("probe-play-btn", "click", () => {
+            if (IS_AUDIO_PLAYING) {
+                stopAudio();
+                return;
+            }
+            if (PROBE_HISTORY.length === 0) {
+                console.error("Cannot play audio: Probe history is empty."); 
+                return;
+            }
+            stopRealtimeAudio();
+            const maxAmp = PROBE_HISTORY.reduce((max, val) => Math.max(max, Math.abs(val)), 0);
+            playAudio(PROBE_HISTORY, PROBE_SAMPLE_RATE, maxAmp);
+        });
+
+        EV("probe-live-btn", "click", () => {
+            if (IS_REALTIME_AUDIO) {
+                stopRealtimeAudio();
+            } else {
+                if (!ACTIVE_PROBE_ID) {
+                    console.error("Cannot start live mode: No probe selected or active.");
+                    return;
+                }
+                startRealtimeAudio();
+            }
+        });
+        
+        const startMarkerEl = $('probe-start-marker');
+        const endMarkerEl = $('probe-end-marker');
+        if (startMarkerEl && endMarkerEl) {
+            startMarkerEl.oninput = () => updateMarkers(startMarkerEl);
+            endMarkerEl.oninput = () => updateMarkers(endMarkerEl);
+        }
+
+        EV("em-st", "input", (e) => {
+          $("em-st-v").innerText = (+e.target.value).toFixed(1);
+          const em = emits.find((x) => x.id === editEmitId);
+          if (em) em.st = +e.target.value;
+        });
+        EV("i-em-rt", "input", (e) => {
+          $("em-rt-v").innerText = e.target.value;
+          const em = emits.find((x) => x.id === editEmitId);
+          if (em) em.rt = +e.target.value;
+        });
+        EV("i-em-of", "input", (e) => {
+          $("em-of-v").innerText = e.target.value;
+          const em = emits.find((x) => x.id === editEmitId);
+          if (em) em.off = +e.target.value;
+        });
+        EV("em-shp", "change", (e) => {
+          const em = emits.find((x) => x.id === editEmitId);
+          if (em) em.shp = e.target.value;
+        });
+        EV("em-geo", "change", (e) => {
+          const em = emits.find((x) => x.id === editEmitId);
+          if (em) em.geo = e.target.value;
+          syncE();
+        });
+        EV("em-del-btn", "click", deleteSelectedEmitter);
+        EV("em-close", "click", () => {
+          selectedEmitterId = null;
+          updateEmitterInspector();
+          syncE();
+        });
+
+        setupSDFMenuHandlers();
+        setupSDFMenuDrag();
+        setupProbeMenuDrag();
       }
 
       function init() {
