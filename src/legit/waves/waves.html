@@ -650,6 +650,56 @@
           </div>
         </div>
 
+		<div id="sim-performance-group">
+		  <div class="expandable-header" data-target="sim-performance-content">
+			Performance & Audio Quality <span class="expand-arrow">&#x25B8;</span>
+		  </div>
+		  <div id="sim-performance-content" class="expandable-content expanded">
+			<h4 style="margin-top: 5px;">Simulation/Frame Rate</h4>
+			<label
+			  >Sim Steps / Frame:
+			  <span id="l-steps" class="value-label">2</span></label
+			><input
+			  type="range"
+			  id="i-steps"
+			  min="1"
+			  max="10"
+			  value="2"
+			  step="1"
+			/>
+
+			<h4 style="margin-top: 10px;">Live Audio Latency (Script Processor)</h4>
+			<label
+			  >Audio Buffer Size (Samples):
+			  <span id="l-buf-size" class="value-label">512</span></label
+			><input
+			  type="range"
+			  id="i-buf-size"
+			  min="256"
+			  max="4096"
+			  value="512"
+			  step="256"
+			/>
+			<label
+			  >Sim Samples / Audio Step:
+			  <span id="l-sim-per-step" class="value-label">1</span></label
+			><input
+			  type="range"
+			  id="i-sim-per-step"
+			  min="1"
+			  max="8"
+			  value="1"
+			  step="1"
+			/>
+			<label style="color: #9cf; margin-top: 8px; font-weight: normal; font-size: 11px;">
+			  Note: Changing these requires stopping and restarting Live Mode.
+			</label>
+			<button id="btn-reconnect-audio" style="margin-top: 8px;">
+			  Apply Audio Settings
+			</button>
+		  </div>
+		</div>
+
         <div id="view-settings-group">
           <div class="expandable-header" data-target="view-settings-content">
             Camera/View Settings <span class="expand-arrow">&#x25B8;</span>
@@ -1255,8 +1305,10 @@
       var IS_REALTIME_AUDIO = false;
       var REALTIME_PROCESSOR = null; 
       var REALTIME_GAIN = null;
-      var SIM_SAMPLES_PER_AUDIO_BUFFER = 512;
+      var SIM_SAMPLES_PER_AUDIO_BUFFER = 1024;
       var SIM_STEPS_PER_FRAME = 2;
+      var SIM_SAMPLES_PER_STEP = 1;
+      var VIZ_SETTINGS_DIRTY = false;
 
       var IMPULSE_MAGNITUDE = 5.0;
       var IS_IMPULSE_HOLD = false;
@@ -1678,52 +1730,462 @@
               stopAudio();
           };
       }
-      const SIM_SAMPLES_PER_STEP = 1;
+function sim() {
+  if (!layers.length) return;
+  var N = GRID;
+
+  TIME++;
+  PROBE_TIME_STEP_COUNTER++;
+  var DT2 = DT_FACTOR * DT_FACTOR;
+  var max_wave_abs = 0.0;
+
+  const USER_VISCOSITY_FACTOR = parseFloat($("i-vis").value);
+  const MIN_DAMPING_FACTOR = 0.90;
+  const DAMPING_RANGE = 1.0 - MIN_DAMPING_FACTOR;
+  const GLOBAL_VISCOSITY_FACTOR = 1.0 - (USER_VISCOSITY_FACTOR * DAMPING_RANGE);
+
+  recordProbeData();
+
+  emits.forEach((e) => {
+    if (e.isProbe) return;
+
+    var phase = (TIME + e.off) * ((2 * Math.PI) / e.rt);
+    var val = 0;
+    if (e.shp === "STATIC") val = e.st;
+    else if (e.shp === "SINE") val = e.st * Math.sin(phase);
+    else if (e.shp === "COSINE") val = e.st * Math.cos(phase);
+    else if (e.shp === "SQUARE") val = e.st * Math.sign(Math.sin(phase));
+    else if (e.shp === "SAW")
+      val = e.st * (2 * (((TIME + e.off) / e.rt) % 1) - 1);
+    else if (e.shp === "NOISE") val = e.st * (Math.random() * 2 - 1);
+
+    if (e.geo === "LINE") {
+      const linePoints = bresenhamLine(e.i, e.j, e.i2, e.j2);
+      if (linePoints.length > 0) {
+        const energyPerPoint = val / linePoints.length;
+        linePoints.forEach((p) => {
+          var idx = p.i * N + p.j;
+          if (e.st >= 0)
+            u[e.lIdx][idx] += (energyPerPoint - u[e.lIdx][idx]) * 0.5;
+          else {
+            var damping = Math.min(
+              1.0,
+              (Math.abs(e.st) * 0.05) / linePoints.length,
+            );
+            u[e.lIdx][idx] *= 1.0 - damping;
+            u_prev[e.lIdx][idx] *= 1.0 - damping;
+          }
+        });
+      }
+    } else {
+      var idx = e.i * N + e.j;
+      if (e.st >= 0) u[e.lIdx][idx] += (val - u[e.lIdx][idx]) * 0.5;
+      else {
+        var damping = Math.min(1.0, Math.abs(e.st) * 0.05);
+        u[e.lIdx][idx] *= 1.0 - damping;
+        u_prev[e.lIdx][idx] *= 1.0 - damping;
+      }
+    }
+  });
+
+  layerCouplingContributions.forEach(arr => arr.fill(0));
+  layerDensityModulations.forEach(arr => arr.fill(0));
+
+  var volK = 0.0;
+  var effC = BASE_LAYER_CFG.C;
+  var effD = BASE_LAYER_CFG.D;
+
+  if (IS_3D_MODE && $("cb-iso").checked) {
+    volK = effC * 1.0;
+  } else if (IS_3D_MODE) {
+    volK = BASE_LAYER_CFG.K;
+  }
+
+  const DT_factor_viscosity = DT_FACTOR * VISCOSITY;
+  const K_FACTOR = IS_3D_MODE ? volK * DT_FACTOR : DT_FACTOR;
+
+  VALVES.forEach((v) => {
+    const targetDensity = v.isKeyPressed ? v.openDensity : v.closedDensity;
+    const densityToWrite = targetDensity;
+
+    const N = GRID;
+    const HALF_SIZE = v.radius;
+    const den_arr = den[v.lIdx];
+
+    for (let r = -HALF_SIZE; r <= HALF_SIZE; r++) {
+      for (let c = -HALF_SIZE; c <= HALF_SIZE; c++) {
+        const rr = v.i + r;
+        const cc = v.j + c;
+
+        if (rr >= 0 && rr < N && cc >= 0 && cc < N) {
+          const idx = rr * N + cc;
+
+          const requiredDensity = densityToWrite;
+
+          den_arr[idx] = requiredDensity;
+        }
+      }
+    }
+  });
+
+  if (!IS_3D_MODE && GLOBAL_COUPLING_LINKS.length > 0) {
+    GLOBAL_COUPLING_LINKS.forEach((link) => {
+      if (
+        link.sourceIdx < layers.length &&
+        link.targetIdx < layers.length &&
+        link.sourceIdx !== link.targetIdx
+      ) {
+        const sourceU = u[link.sourceIdx];
+        const targetU = u[link.targetIdx];
+        const sourcePrev = u_prev[link.sourceIdx];
+        const rate = link.rate;
+        const targetProp = link.targetProperty;
+        const type = link.type;
+
+        for (let ptr = 0; ptr < N * N; ptr++) {
+          if (type === "ENERGY_EXCHANGE") {
+            const diff = sourceU[ptr] - targetU[ptr];
+
+            layerCouplingContributions[link.targetIdx][ptr] +=
+              rate * diff;
+            layerCouplingContributions[link.sourceIdx][ptr] -=
+              rate * diff;
+          } else if (type === "MODULATE_DENSITY") {
+            let sourceAmp = Math.abs(sourceU[ptr]);
+
+            let densityModulation = Math.max(
+              0,
+              Math.min(rate * sourceAmp, 1.0),
+            );
+
+            layerDensityModulations[link.targetIdx][ptr] +=
+              densityModulation;
+          } else {
+            let sourceValue = 0;
+            if (targetProp === "AMPLITUDE") sourceValue = sourceU[ptr];
+            else if (targetProp === "VELOCITY")
+              sourceValue = sourceU[ptr] - sourcePrev[ptr];
+            layerCouplingContributions[link.targetIdx][ptr] +=
+              rate * (sourceValue - targetU[ptr]);
+          }
+        }
+      }
+    });
+  }
+  
+  // Pre-calculate custom variables map if needed
+  const customVars = {};
+  const formulaFn = (GLOBAL_CUSTOM_FORMULA.code.trim() && COMPILED_CUSTOM_FUNCTION) ? COMPILED_CUSTOM_FUNCTION : null;
+
+  if (formulaFn) {
+    GLOBAL_CUSTOM_FORMULA.variables.split(";").forEach((pair) => {
+      const parts = pair.split("=");
+      if (parts.length === 2) {
+        customVars[parts[0].trim()] = parseFloat(parts[1].trim());
+      }
+    });
+  }
+
+  for (let idx = 0; idx < layers.length; idx++) {
+    const l = layers[idx];
+    const u_current_arr = u[idx];
+    const u_prev_arr = u_prev[idx];
+    const u_next_arr = u_aux[idx];
+    const den_arr = den[idx];
+
+    const u_above_arr = idx < layers.length - 1 ? u[idx + 1] : null;
+    const u_prev_above_arr = idx < layers.length - 1 ? u_prev[idx + 1] : null;
+
+    const u_below_arr = idx > 0 ? u[idx - 1] : null;
+    const u_prev_below_arr = idx > 0 ? u_prev[idx - 1] : null;
+
+    const K_BELOW = idx > 0 ? layers[idx - 1].K : 0;
+    const K_CURR = l.K;
+
+    const finalC = IS_3D_MODE ? BASE_LAYER_CFG.C : l.C;
+    const finalD = IS_3D_MODE ? BASE_LAYER_CFG.D : l.D;
+    const effBnd = IS_3D_MODE ? l.bnd : l.bnd;
+
+    const externalCouplingArr = layerCouplingContributions[idx];
+    const densityModulationArr = layerDensityModulations[idx];
+
+    const S_factor = Math.sqrt(finalC) * DT_FACTOR;
+    const murCoeff = (S_factor - 1.0) / (S_factor + 1.0);
+    const isTopBoundary = (idx === 0);
+    const isBottomBoundary = (idx === layers.length - 1);
+    const isZAbsorbing = IS_3D_MODE && IS_VOL_ABSORBING_BND;
+    const isIsotropic = IS_3D_MODE && $("cb-iso").checked;
+
+    for (let i = 1; i < N - 1; i++) {
+      const offset = i * N;
+      for (let j = 1; j < N - 1; j++) {
+        const ptr = offset + j;
+
+        const localDensity = den_arr[ptr];
+        const effectiveDensity = Math.min(1.0, localDensity + densityModulationArr[ptr]);
+
+        if (effectiveDensity > 0.99) {
+          u_next_arr[ptr] = u_current_arr[ptr];
+          continue;
+        }
+
+        const globalDensity = GLOBAL_DEN[ptr];
+        const U_CURR = u_current_arr[ptr];
+        const U_PREV = u_prev_arr[ptr];
+
+        let lap =
+          u_current_arr[ptr + 1] +
+          u_current_arr[ptr - 1] +
+          u_current_arr[ptr + N] +
+          u_current_arr[ptr - N] -
+          4 * U_CURR; // Optimized 2D Laplacian
+
+        let COUPLING_TERM = 0;
+
+        if (isIsotropic) {
+
+          if (isZAbsorbing && (isTopBoundary || isBottomBoundary)) {
+            const U_NEIGH_CURR = isTopBoundary ? u_above_arr[ptr] : u_below_arr[ptr];
+            const val_z_abc = U_NEIGH_CURR + murCoeff * (U_NEIGH_CURR - U_CURR);
+            u_next_arr[ptr] = val_z_abc;
+            continue;
+          }
+
+          let U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
+          let U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
+
+          if (!isZAbsorbing) {
+            if (isTopBoundary) U_ABOVE = U_CURR;
+            if (isBottomBoundary) U_BELOW = U_CURR;
+          }
+
+          lap += U_ABOVE + U_BELOW - 2 * U_CURR; // Correct 3D Laplacian term (adds 2 neighbors, subtracts 2 center)
+
+        } else if (IS_3D_MODE) {
+
+          let U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
+          let U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
+
+          if (!isZAbsorbing) {
+            if (isTopBoundary) U_ABOVE = 0;
+            if (isBottomBoundary) U_BELOW = 0;
+          }
+
+          COUPLING_TERM = K_FACTOR * (U_ABOVE + U_BELOW - 2 * U_CURR);
+        } else {
+          const U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
+          const U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
+          COUPLING_TERM =
+            K_FACTOR * (K_BELOW * (U_BELOW - U_CURR) + K_CURR * (U_ABOVE - U_CURR));
+        }
+
+        const C_density = effectiveDensity > 0 ? finalC * (1 - effectiveDensity) : finalC;
+
+        let C_final = C_density;
+        if (globalDensity > 0) {
+          const C_global_refract = 1.0 + globalDensity * (GLOBAL_DEN_REFRACTION - 1.0);
+          C_final = C_density / C_global_refract;
+        }
+
+        let D_final = finalD;
+        if (globalDensity > 0) {
+          const D_global_absorb = GLOBAL_DEN_ABSORPTION * globalDensity;
+          D_final = finalD + D_global_absorb;
+        }
+
+        let EXTERNAL_COUPLING_TERM = externalCouplingArr[ptr] * DT_FACTOR;
+
+        let val;
+
+        // --- OPTIMIZATION: Hardcoded Formulas ---
+        if (l.formulaKey === "WAVE") {
+          val =
+            2 * U_CURR -
+            U_PREV +
+            C_final * lap * DT2 -
+            D_final * (U_CURR - U_PREV) +
+            COUPLING_TERM +
+            EXTERNAL_COUPLING_TERM;
+        } else if (l.formulaKey === "DIFFUSION") {
+          val =
+            U_CURR +
+            DT_FACTOR *
+            (C_final * lap - D_final * U_CURR) +
+            COUPLING_TERM +
+            EXTERNAL_COUPLING_TERM;
+        } else if (l.formulaKey === "REACTION") {
+          const F = l.C;
+          const k = l.D;
+          val =
+            U_CURR +
+            DT_FACTOR *
+            (C_final * lap - F * U_CURR + k * (1.0 - U_CURR)) +
+            COUPLING_TERM +
+            EXTERNAL_COUPLING_TERM;
+        } else if (l.formulaKey === "CUSTOM" && formulaFn) {
+          // Keep slower custom execution path only for custom model
+          const scope = {
+            U_CURR: U_CURR,
+            U_PREV: U_PREV,
+            LAP: lap,
+            DT_FACTOR: DT_FACTOR,
+            C_final: C_final,
+            D_final: D_final,
+            COUPLING_TERM: COUPLING_TERM,
+            EXT_COUPLING: EXTERNAL_COUPLING_TERM,
+            Math: Math,
+            ...customVars,
+          };
+          val = formulaFn.call({ vars: scope });
+        } else {
+          // Fallback to standard wave
+          val =
+            2 * U_CURR -
+            U_PREV +
+            C_final * lap * DT2 -
+            D_final * (U_CURR - U_PREV);
+        }
+        // --- END OPTIMIZATION ---
+
+        val = Math.max(-10.0, Math.min(10.0, val));
+        u_next_arr[ptr] = val;
+        max_wave_abs = Math.max(max_wave_abs, Math.abs(val));
+      }
+    }
+
+    for (let k = 0; k < N * N; k++) {
+      u_next_arr[k] *= GLOBAL_VISCOSITY_FACTOR;
+    }
+
+    const effC2D = IS_3D_MODE ? BASE_LAYER_CFG.C : l.C;
+    const S_2D = Math.sqrt(effC2D) * DT_FACTOR;
+    const murCoeff2D = (S_2D - 1.0) / (S_2D + 1.0);
+
+    if (effBnd === "ABSORBING" || (IS_3D_MODE && IS_VOL_ABSORBING_BND)) {
+      for (let k = 1; k < N - 1; k++) {
+        let ptrTop = k;
+        let ptrTopNeigh = ptrTop + N;
+        u_next_arr[ptrTop] =
+          u_current_arr[ptrTopNeigh] +
+          murCoeff2D * (u_next_arr[ptrTopNeigh] - u_current_arr[ptrTop]);
+
+        let ptrBot = (N - 1) * N + k;
+        let ptrBotNeigh = ptrBot - N;
+        u_next_arr[ptrBot] =
+          u_current_arr[ptrBotNeigh] +
+          murCoeff2D * (u_next_arr[ptrBotNeigh] - u_current_arr[ptrBot]);
+      }
+
+      for (let k = 1; k < N - 1; k++) {
+        let ptrLeft = k * N;
+        let ptrLeftNeigh = ptrLeft + 1;
+        u_next_arr[ptrLeft] =
+          u_current_arr[ptrLeftNeigh] +
+          murCoeff2D * (u_next_arr[ptrLeftNeigh] - u_current_arr[ptrLeft]);
+
+        let ptrRight = k * N + N - 1;
+        let ptrRightNeigh = ptrRight - 1;
+        u_next_arr[ptrRight] =
+          u_current_arr[ptrRightNeigh] +
+          murCoeff2D *
+          (u_next_arr[ptrRightNeigh] - u_current_arr[ptrRight]);
+      }
+
+      u_next_arr[0] = (u_next_arr[1] + u_next_arr[N]) * 0.5;
+      u_next_arr[N - 1] =
+        (u_next_arr[N - 2] + u_next_arr[2 * N - 1]) * 0.5;
+      u_next_arr[(N - 1) * N] =
+        (u_next_arr[(N - 1) * N + 1] + u_next_arr[(N - 2) * N]) * 0.5;
+      u_next_arr[N * N - 1] =
+        (u_next_arr[N * N - 2] + u_next_arr[(N - 1) * N - 1]) * 0.5;
+
+    } else {
+      for (let k = 0; k < N; k++) {
+        u_next_arr[k] = 0;
+        u_next_arr[(N - 1) * N + k] = 0;
+        u_next_arr[k * N] = 0;
+        u_next_arr[k * N + N - 1] = 0;
+      }
+    }
+  }
+
+  var temp = u_prev;
+  u_prev = u;
+  u = u_aux;
+  u_aux = temp;
+  MAX_WAVE_ABS = max_wave_abs;
+}
+
+
 function connectLiveAudio() {
     if (!AUDIO_CONTEXT) {
         setupAudio();
         if (!AUDIO_CONTEXT) return;
     }
 
-    REALTIME_PROCESSOR = AUDIO_CONTEXT.createScriptProcessor(SIM_SAMPLES_PER_AUDIO_BUFFER, 0, 1);
+    // Stop and clean up old connection before creating a new one
+    if (REALTIME_PROCESSOR) {
+        REALTIME_PROCESSOR.disconnect();
+        REALTIME_PROCESSOR = null;
+        REALTIME_GAIN = null;
+    }
+
+    const bufferSize = SIM_SAMPLES_PER_AUDIO_BUFFER;
+    const simSamplesPerStep = SIM_SAMPLES_PER_STEP;
+    
+    // Check if the browser supports the requested buffer size
+    const supportedSizes = [0, 256, 512, 1024, 2048, 4096, 8192, 16384];
+    if (!supportedSizes.includes(bufferSize) && bufferSize !== 0) {
+        console.warn(`Requested buffer size ${bufferSize} might be unsupported. Using default 512.`);
+        // For ScriptProcessor, 0 (let system decide) or powers of 2 are recommended.
+    }
+
+    try {
+        REALTIME_PROCESSOR = AUDIO_CONTEXT.createScriptProcessor(bufferSize, 0, 1);
+    } catch(e) {
+        console.error("Failed to create ScriptProcessor. Check buffer size support.", e);
+        stopRealtimeAudio();
+        return;
+    }
+    
     REALTIME_GAIN = AUDIO_CONTEXT.createGain();
 
     REALTIME_GAIN.gain.setValueAtTime(0.0, AUDIO_CONTEXT.currentTime);
-    
+
+    const em = emits.find((x) => x.id === ACTIVE_PROBE_ID);
+    const sensitivity = em ? em.probeSensitivity : 0.5;
+    const TARGET_GAIN = 0.5 * sensitivity;
+
     REALTIME_PROCESSOR.onaudioprocess = function(e) {
         if (!IS_REALTIME_AUDIO || IS_PAUSED || !ACTIVE_PROBE_ID || !REALTIME_GAIN) {
             e.outputBuffer.getChannelData(0).fill(0);
             return;
         }
 
-        const outputBuffer = e.outputBuffer.getChannelData(0);
-        const bufferSize = outputBuffer.length;
-        
-        const em = emits.find((x) => x.id === ACTIVE_PROBE_ID);
-        const sensitivity = em ? em.probeSensitivity : 0.5;
-        const TARGET_GAIN = 0.5 * sensitivity;
+        const outputChannel = e.outputBuffer.getChannelData(0);
+        const bufferSize = outputChannel.length;
 
         for (let i = 0; i < bufferSize; i++) {
-            if(i % SIM_SAMPLES_PER_STEP == 0) {
+            // Use the dynamic steps per sample
+            if (i % simSamplesPerStep === 0) { 
                 sim(); 
             }
 
-            let liveSample = PROBE_HISTORY.length > 0 
-                ? PROBE_HISTORY[PROBE_HISTORY.length - 1] 
+            let liveSample = PROBE_HISTORY.length > 0
+                ? PROBE_HISTORY[PROBE_HISTORY.length - 1]
                 : 0;
-
-            let scaledSample = liveSample;
-            scaledSample = Math.tanh(scaledSample * 2.0) / 2.0;
-
-            outputBuffer[i] = scaledSample; 
+            
+            // Anti-blowout function
+            outputChannel[i] = Math.tanh(liveSample * 2.0) / 2.0;
         }
 
-        REALTIME_GAIN.gain.exponentialRampToValueAtTime(TARGET_GAIN, AUDIO_CONTEXT.currentTime + 0.1); 
+        REALTIME_GAIN.gain.exponentialRampToValueAtTime(TARGET_GAIN, AUDIO_CONTEXT.currentTime + 0.1);
     };
-    
+
     REALTIME_PROCESSOR.connect(REALTIME_GAIN);
     REALTIME_GAIN.connect(AUDIO_CONTEXT.destination);
 }
+
       function startRealtimeAudio() {
           if (!AUDIO_CONTEXT) {
               setupAudio();
@@ -3345,510 +3807,135 @@ function recordProbeData() {
     return activeProbeCount > 0 ? totalValue / activeProbeCount : 0;
 }
 
-function sim() {
-        if (!layers.length) return;
-        var N = GRID;
-
-        TIME++;
-        PROBE_TIME_STEP_COUNTER++;
-        var DT2 = DT_FACTOR * DT_FACTOR;
-        var max_wave_abs = 0.0;
-        
-        const USER_VISCOSITY_FACTOR = parseFloat($("i-vis").value);
-        const MIN_DAMPING_FACTOR = 0.90; 
-        const DAMPING_RANGE = 1.0 - MIN_DAMPING_FACTOR; 
-        const GLOBAL_VISCOSITY_FACTOR = 1.0 - (USER_VISCOSITY_FACTOR * DAMPING_RANGE);
-        
-        recordProbeData(); 
-
-        emits.forEach((e) => {
-          if (e.isProbe) return;
-            
-          var phase = (TIME + e.off) * ((2 * Math.PI) / e.rt);
-          var val = 0;
-          if (e.shp === "STATIC") val = e.st;
-          else if (e.shp === "SINE") val = e.st * Math.sin(phase);
-          else if (e.shp === "COSINE") val = e.st * Math.cos(phase);
-          else if (e.shp === "SQUARE") val = e.st * Math.sign(Math.sin(phase));
-          else if (e.shp === "SAW")
-            val = e.st * (2 * (((TIME + e.off) / e.rt) % 1) - 1);
-          else if (e.shp === "NOISE") val = e.st * (Math.random() * 2 - 1);
-
-          if (e.geo === "LINE") {
-            const linePoints = bresenhamLine(e.i, e.j, e.i2, e.j2);
-            if (linePoints.length > 0) {
-              const energyPerPoint = val / linePoints.length;
-              linePoints.forEach((p) => {
-                var idx = p.i * N + p.j;
-                if (e.st >= 0)
-                  u[e.lIdx][idx] += (energyPerPoint - u[e.lIdx][idx]) * 0.5;
-                else {
-                  var damping = Math.min(
-                    1.0,
-                    (Math.abs(e.st) * 0.05) / linePoints.length,
-                  );
-                  u[e.lIdx][idx] *= 1.0 - damping;
-                  u_prev[e.lIdx][idx] *= 1.0 - damping;
-                }
-              });
-            }
-          } else {
-            var idx = e.i * N + e.j;
-            if (e.st >= 0) u[e.lIdx][idx] += (val - u[e.lIdx][idx]) * 0.5;
-            else {
-              var damping = Math.min(1.0, Math.abs(e.st) * 0.05);
-              u[e.lIdx][idx] *= 1.0 - damping;
-              u_prev[e.lIdx][idx] *= 1.0 - damping;
-            }
-          }
-        });
-				
-		layerCouplingContributions.forEach(arr => arr.fill(0));
-    	layerDensityModulations.forEach(arr => arr.fill(0));
-        
-		var volK = 0.0;
-        var effC = BASE_LAYER_CFG.C;
-        var effD = BASE_LAYER_CFG.D;
-
-        if (IS_3D_MODE && $("cb-iso").checked) {
-          volK = effC * 1.0;
-        } else if (IS_3D_MODE) {
-          volK = BASE_LAYER_CFG.K;
-        }
-
-        const DT_factor_viscosity = DT_FACTOR * VISCOSITY;
-        const K_FACTOR = IS_3D_MODE ? volK * DT_FACTOR : DT_FACTOR;
-        
-        VALVES.forEach((v) => {
-            const targetDensity = v.isKeyPressed ? v.openDensity : v.closedDensity;
-            const densityToWrite = targetDensity; 
-
-            const N = GRID;
-            const HALF_SIZE = v.radius; 
-            const den_arr = den[v.lIdx];
-
-            for (let r = -HALF_SIZE; r <= HALF_SIZE; r++) {
-                for (let c = -HALF_SIZE; c <= HALF_SIZE; c++) {
-                    const rr = v.i + r;
-                    const cc = v.j + c;
-
-                    if (rr >= 0 && rr < N && cc >= 0 && cc < N) {
-                        const idx = rr * N + cc;
-                        
-                        const requiredDensity = densityToWrite; 
-                        
-                        den_arr[idx] = requiredDensity; 
-                    }
-                }
-            }
-        });
-
-        if (!IS_3D_MODE && GLOBAL_COUPLING_LINKS.length > 0) {
-          GLOBAL_COUPLING_LINKS.forEach((link) => {
-            if (
-              link.sourceIdx < layers.length &&
-              link.targetIdx < layers.length &&
-              link.sourceIdx !== link.targetIdx
-            ) {
-              const sourceU = u[link.sourceIdx];
-              const targetU = u[link.targetIdx];
-              const sourcePrev = u_prev[link.sourceIdx];
-              const rate = link.rate;
-              const targetProp = link.targetProperty;
-              const type = link.type;
-
-              for (let ptr = 0; ptr < N * N; ptr++) {
-                if (type === "ENERGY_EXCHANGE") {
-                  const diff = sourceU[ptr] - targetU[ptr];
-
-                  layerCouplingContributions[link.targetIdx][ptr] +=
-                    rate * diff;
-                  layerCouplingContributions[link.sourceIdx][ptr] -=
-                    rate * diff;
-                } else if (type === "MODULATE_DENSITY") {
-                  let sourceAmp = Math.abs(sourceU[ptr]);
-
-                  let densityModulation = Math.max(
-                    0,
-                    Math.min(rate * sourceAmp, 1.0),
-                  );
-
-                  layerDensityModulations[link.targetIdx][ptr] +=
-                    densityModulation;
-                } else {
-                  let sourceValue = 0;
-                  if (targetProp === "AMPLITUDE") sourceValue = sourceU[ptr];
-                  else if (targetProp === "VELOCITY")
-                    sourceValue = sourceU[ptr] - sourcePrev[ptr];
-                  layerCouplingContributions[link.targetIdx][ptr] +=
-                    rate * (sourceValue - targetU[ptr]);
-                }
-              }
-            }
-          });
-        }
-
-        for (let idx = 0; idx < layers.length; idx++) {
-          const l = layers[idx];
-          const u_current_arr = u[idx];
-          const u_prev_arr = u_prev[idx];
-          const u_next_arr = u_aux[idx];
-          const den_arr = den[idx];
-
-          const u_above_arr = idx < layers.length - 1 ? u[idx + 1] : null;
-          const u_prev_above_arr = idx < layers.length - 1 ? u_prev[idx + 1] : null;
-          
-          const u_below_arr = idx > 0 ? u[idx - 1] : null;
-          const u_prev_below_arr = idx > 0 ? u_prev[idx - 1] : null;
-
-          const K_BELOW = idx > 0 ? layers[idx - 1].K : 0;
-          const K_CURR = l.K;
-          
-          const finalC = IS_3D_MODE ? BASE_LAYER_CFG.C : l.C;
-          const finalD = IS_3D_MODE ? BASE_LAYER_CFG.D : l.D;
-          const effBnd = IS_3D_MODE ? l.bnd : l.bnd;
-          
-          const externalCouplingArr = layerCouplingContributions[idx];
-          const densityModulationArr = layerDensityModulations[idx];
-          const formulaFn = (l.formulaKey === "CUSTOM" && COMPILED_CUSTOM_FUNCTION) ? COMPILED_CUSTOM_FUNCTION : null;
-          
-          const customVars = {};
-          if (formulaFn) {
-            GLOBAL_CUSTOM_FORMULA.variables.split(";").forEach((pair) => {
-              const parts = pair.split("=");
-              if (parts.length === 2) {
-                customVars[parts[0].trim()] = parseFloat(parts[1].trim());
-              }
-            });
-          }
-
-          const S_factor = Math.sqrt(finalC) * DT_FACTOR;
-          const murCoeff = (S_factor - 1.0) / (S_factor + 1.0);
-          const isTopBoundary = (idx === 0);
-          const isBottomBoundary = (idx === layers.length - 1);
-          const isZAbsorbing = IS_3D_MODE && IS_VOL_ABSORBING_BND;
-          const isIsotropic = IS_3D_MODE && $("cb-iso").checked;
-
-          for (let i = 1; i < N - 1; i++) {
-            const offset = i * N;
-            for (let j = 1; j < N - 1; j++) {
-              const ptr = offset + j;
-
-              const localDensity = den_arr[ptr];
-              const effectiveDensity = Math.min(1.0, localDensity + densityModulationArr[ptr]);
-
-              if (effectiveDensity > 0.99) {
-                u_next_arr[ptr] = u_current_arr[ptr];
-                continue;
-              }
-
-              const globalDensity = GLOBAL_DEN[ptr];
-              const U_CURR = u_current_arr[ptr];
-              const U_PREV = u_prev_arr[ptr];
-
-              let lap =
-                u_current_arr[ptr + 1] +
-                u_current_arr[ptr - 1] +
-                u_current_arr[ptr + N] +
-                u_current_arr[ptr - N];
-              
-              let COUPLING_TERM = 0; 
-
-              if (isIsotropic) {
-                  
-                  if (isZAbsorbing && (isTopBoundary || isBottomBoundary)) {
-                       const U_NEIGH_CURR = isTopBoundary ? u_above_arr[ptr] : u_below_arr[ptr];
-                       const val_z_abc = U_NEIGH_CURR + murCoeff * (U_NEIGH_CURR - U_CURR);
-                       u_next_arr[ptr] = val_z_abc;
-                       continue;
-                  }
-                  
-                  let U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
-                  let U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
-                  
-                  if (!isZAbsorbing) {
-                      if (isTopBoundary) U_ABOVE = U_CURR;
-                      if (isBottomBoundary) U_BELOW = U_CURR;
-                  }
-                  
-                  lap += U_ABOVE + U_BELOW;
-                  lap -= 6 * U_CURR;
-                  
-              } else if (IS_3D_MODE) {
-                  
-                  lap -= 4 * U_CURR;
-                  
-                  let U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
-                  let U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
-                  
-                  if (!isZAbsorbing) {
-                      if (isTopBoundary) U_ABOVE = 0;
-                      if (isBottomBoundary) U_BELOW = 0;
-                  }
-                  
-                  COUPLING_TERM = K_FACTOR * (U_ABOVE + U_BELOW - 2 * U_CURR);
-              } else {
-                lap -= 4 * U_CURR;
-                const U_BELOW = u_below_arr ? u_below_arr[ptr] : U_CURR;
-                const U_ABOVE = u_above_arr ? u_above_arr[ptr] : U_CURR;
-                COUPLING_TERM =
-                  K_FACTOR * (K_BELOW * (U_BELOW - U_CURR) + K_CURR * (U_ABOVE - U_CURR));
-              }
-
-              const C_density = effectiveDensity > 0 ? finalC * (1 - effectiveDensity) : finalC;
-
-              let C_final = C_density;
-              if (globalDensity > 0) {
-                const C_global_refract = 1.0 + globalDensity * (GLOBAL_DEN_REFRACTION - 1.0);
-                C_final = C_density / C_global_refract;
-              }
-
-              let D_final = finalD;
-              if (globalDensity > 0) {
-                const C_global_refract = 1.0 + globalDensity * (GLOBAL_DEN_REFRACTION - 1.0);
-                C_final = C_density / C_global_refract;
-              }
-
-              let EXTERNAL_COUPLING_TERM = externalCouplingArr[ptr] * DT_FACTOR;
-
-              let val;
-              
-              if (formulaFn) {
-                const scope = {
-                  U_CURR: U_CURR,
-                  U_PREV: U_PREV,
-                  LAP: lap,
-                  DT_FACTOR: DT_FACTOR,
-                  C_final: C_final,
-                  D_final: D_final,
-                  COUPLING_TERM: COUPLING_TERM,
-                  EXT_COUPLING: EXTERNAL_COUPLING_TERM,
-                  Math: Math,
-                  ...customVars,
-                };
-                val = formulaFn.call({ vars: scope });
-              } else if (l.formulaKey === "WAVE") {
-                val =
-                  2 * U_CURR -
-                  U_PREV +
-                  C_final * lap * DT2 - 
-                  D_final * (U_CURR - U_PREV) +
-                  COUPLING_TERM +
-                  EXTERNAL_COUPLING_TERM;
-              } else if (l.formulaKey === "DIFFUSION") {
-                val =
-                  U_CURR +
-                  DT_FACTOR *
-                    (C_final * lap - D_final * U_CURR) +
-                  COUPLING_TERM +
-                  EXTERNAL_COUPLING_TERM;
-              } else if (l.formulaKey === "REACTION") {
-                const F = l.C;
-                const k = l.D;
-                val =
-                  U_CURR +
-                  DT_FACTOR *
-                    (C_final * lap - F * U_CURR + k * (1.0 - U_CURR)) +
-                  COUPLING_TERM +
-                  EXTERNAL_COUPLING_TERM;
-              } else {
-                val =
-                  2 * U_CURR -
-                  U_PREV +
-                  C_final * lap * DT2 -
-                  D_final * (U_CURR - U_PREV);
-              }
-              
-              val = Math.max(-10.0, Math.min(10.0, val));
-              u_next_arr[ptr] = val;
-              max_wave_abs = Math.max(max_wave_abs, Math.abs(val));
-            }
-          }
-
-          for (let k = 0; k < N * N; k++) {
-              u_next_arr[k] *= GLOBAL_VISCOSITY_FACTOR;
-          }
-
-          const effC2D = IS_3D_MODE ? BASE_LAYER_CFG.C : l.C;
-          const S_2D = Math.sqrt(effC2D) * DT_FACTOR;
-          const murCoeff2D = (S_2D - 1.0) / (S_2D + 1.0);
-          
-          if (effBnd === "ABSORBING" || (IS_3D_MODE && IS_VOL_ABSORBING_BND)) {
-            for (let k = 1; k < N - 1; k++) {
-              let ptrTop = k;
-              let ptrTopNeigh = ptrTop + N;
-              u_next_arr[ptrTop] =
-                u_current_arr[ptrTopNeigh] +
-                murCoeff2D * (u_next_arr[ptrTopNeigh] - u_current_arr[ptrTop]);
-
-              let ptrBot = (N - 1) * N + k;
-              let ptrBotNeigh = ptrBot - N;
-              u_next_arr[ptrBot] =
-                u_current_arr[ptrBotNeigh] +
-                murCoeff2D * (u_next_arr[ptrBotNeigh] - u_current_arr[ptrBot]);
-            }
-
-            for (let k = 1; k < N - 1; k++) {
-              let ptrLeft = k * N;
-              let ptrLeftNeigh = ptrLeft + 1;
-              u_next_arr[ptrLeft] =
-                u_current_arr[ptrLeftNeigh] +
-                murCoeff2D * (u_next_arr[ptrLeftNeigh] - u_current_arr[ptrLeft]);
-
-              let ptrRight = k * N + N - 1;
-              let ptrRightNeigh = ptrRight - 1;
-              u_next_arr[ptrRight] =
-                u_current_arr[ptrRightNeigh] +
-                murCoeff2D *
-                  (u_next_arr[ptrRightNeigh] - u_current_arr[ptrRight]);
-            }
-            
-            u_next_arr[0] = (u_next_arr[1] + u_next_arr[N]) * 0.5;
-            u_next_arr[N - 1] =
-              (u_next_arr[N - 2] + u_next_arr[2 * N - 1]) * 0.5;
-            u_next_arr[(N - 1) * N] =
-              (u_next_arr[(N - 1) * N + 1] + u_next_arr[(N - 2) * N]) * 0.5;
-            u_next_arr[N * N - 1] =
-              (u_next_arr[N * N - 2] + u_next_arr[(N - 1) * N - 1]) * 0.5;
-
-          } else {
-            for (let k = 0; k < N; k++) {
-              u_next_arr[k] = 0;
-              u_next_arr[(N - 1) * N + k] = 0;
-              u_next_arr[k * N] = 0;
-              u_next_arr[k * N + N - 1] = 0;
-            }
-          }
-        }
-
-        var temp = u_prev;
-        u_prev = u;
-        u = u_aux;
-        u_aux = temp;
-        MAX_WAVE_ABS = max_wave_abs;
-}
-
       function lerp(a, b, t) {
         return a + (b - a) * t;
       }
 
-      function loop() {
-        requestAnimationFrame(loop);
+  function loop() {
+  requestAnimationFrame(loop);
 
-        const toggleBtn = $("btn-toggle-play");
-        if (IS_PAUSED) {
-          toggleBtn.textContent = "Play";
-          toggleBtn.style.background = "#28a745";
-          toggleBtn.style.borderColor = "#28a745";
-        } else {
-          toggleBtn.textContent = "Pause";
-          toggleBtn.style.background = "var(--color-warning)";
-          toggleBtn.style.borderColor = "var(--color-warning)";
-          
-          if (!IS_REALTIME_AUDIO) {
-              for (let i = 0; i < SIM_STEPS_PER_FRAME; i++) {
-                  sim();
-              }
-          }
-        }
-        
-        if (ACTIVE_PROBE_ID && !IS_PAUSED) {
-            updateProbeMenuInfo();
-            if (TIME % 5 === 0) {
-                const maxAbs = PROBE_HISTORY.reduce((max, val) => Math.max(max, Math.abs(val)), 0);
-                renderProbeGraph(PROBE_HISTORY, maxAbs);
-            }
-        }
+  const toggleBtn = $("btn-toggle-play");
+  if (IS_PAUSED) {
+    toggleBtn.textContent = "Play";
+    toggleBtn.style.background = "#28a745";
+    toggleBtn.style.borderColor = "#28a745";
+  } else {
+    toggleBtn.textContent = "Pause";
+    toggleBtn.style.background = "var(--color-warning)";
+    toggleBtn.style.borderColor = "var(--color-warning)";
 
-        if (selectedValveId) {
-            updateValveMenuInfo();
-        }
-
-        if (AUTO_EXPOSURE) {
-          const maxWaveValue = Math.max(0.01, MAX_WAVE_ABS);
-          const DisplayReferenceMax = 0.5;
-          const maxVisualIntensity =
-            maxWaveValue * 0.2 * BASE_POINT_SETTINGS.pointScaleFactor;
-          let targetExposure = DisplayReferenceMax / maxVisualIntensity;
-
-          targetExposure = Math.max(0.0, Math.min(2.0, targetExposure));
-
-          EXPOSURE = lerp(EXPOSURE, targetExposure, 0.05);
-
-          $("i-exposure").value = EXPOSURE;
-          $("l-exposure").innerText = EXPOSURE.toFixed(2);
-        }
-
-        if (
-          isContinuousBrushActive &&
-          (brush === "DISTURBANCE" || brush === "DENSITY_PAINT")
-        ) {
-          if (activeBrushHit) {
-            interact(activeBrushHit.i, activeBrushHit.j, activeBrushHit.lIdx);
-          }
-        }
-
-        if (brush === "SDF_PLACE" && $("sdf-menu").style.display === "block") {
-          updateStampPreview();
-        }
-
-        meshes.forEach((m, i) => {
-          if (!layers[i]) return;
-          const l = layers[i];
-          if (!l.vis) {
-            m.visible = false;
-            return;
-          }
-          m.visible = true;
-
-          const isMeshVis = !IS_3D_MODE && m.userData.visMode === "MESH";
-
-          var pos = m.geometry.attributes.position.array;
-          var hAttr = m.geometry.attributes.waveHeight.array;
-          var vAttr = m.geometry.attributes.waveVelocity.array;
-          var dAttr = m.geometry.attributes.aDensity.array;
-
-          for (let k = 0; k < GRID * GRID; k++) {
-            hAttr[k] = u[i][k];
-            vAttr[k] = u[i][k] - u_prev[i][k];
-            let combinedDensity = den[i][k] + layerDensityModulations[i][k];
-            combinedDensity = Math.max(combinedDensity, GLOBAL_DEN[k]);
-            dAttr[k] = Math.min(1.0, combinedDensity);
-
-            if (isMeshVis) {
-              pos[k * 3 + 1] = u[i][k] * ZSC * 0.1;
-            }
-          }
-          m.geometry.attributes.waveHeight.needsUpdate = true;
-          m.geometry.attributes.waveVelocity.needsUpdate = true;
-          m.geometry.attributes.aDensity.needsUpdate = true;
-          if (isMeshVis) m.geometry.attributes.position.needsUpdate = true;
-
-          if (isMeshVis) m.geometry.computeVertexNormals();
-          if (m.material.uniforms) {
-            m.material.uniforms.SUN_DIR.value = sunDir;
-            m.material.uniforms.LIGHT_INTENSITY.value = lInt;
-            m.material.uniforms.REFLECTIVITY.value = REFLECTIVITY;
-            m.material.uniforms.VIS_MIN.value = visMin;
-            m.material.uniforms.VIS_MAX.value = visMax;
-            m.material.uniforms.uExposure.value = EXPOSURE;
-            if (m.material.uniforms.uZScale) {
-              m.material.uniforms.uZScale.value = ZSC;
-            }
-            if (m.material.uniforms.uPointSize) {
-              m.material.uniforms.uPointSize.value = l.pointSize;
-            }
-            if (m.material.uniforms.uPointScaleFactor) {
-              m.material.uniforms.uPointScaleFactor.value = l.pointScaleFactor;
-            }
-            if (m.material.uniforms.uPointFalloff) {
-              m.material.uniforms.uPointFalloff.value = l.pointFalloff;
-            }
-          }
-        });
-        updCam();
-        renderer.render(scene, camera);
+    if (!IS_REALTIME_AUDIO) {
+      // Use dynamic sim steps per frame
+      for (let i = 0; i < SIM_STEPS_PER_FRAME; i++) {
+        sim();
       }
+    }
+  }
+
+  if (ACTIVE_PROBE_ID && !IS_PAUSED) {
+    updateProbeMenuInfo();
+    if (TIME % 5 === 0) {
+      const maxAbs = PROBE_HISTORY.reduce((max, val) => Math.max(max, Math.abs(val)), 0);
+      renderProbeGraph(PROBE_HISTORY, maxAbs);
+    }
+  }
+
+  if (selectedValveId) {
+    updateValveMenuInfo();
+  }
+
+  if (AUTO_EXPOSURE) {
+    const maxWaveValue = Math.max(0.01, MAX_WAVE_ABS);
+    const DisplayReferenceMax = 0.5;
+    const maxVisualIntensity =
+      maxWaveValue * 0.2 * BASE_POINT_SETTINGS.pointScaleFactor;
+    let targetExposure = DisplayReferenceMax / maxVisualIntensity;
+
+    targetExposure = Math.max(0.0, Math.min(2.0, targetExposure));
+
+    EXPOSURE = lerp(EXPOSURE, targetExposure, 0.05);
+
+    $("i-exposure").value = EXPOSURE;
+    $("l-exposure").innerText = EXPOSURE.toFixed(2);
+    VIZ_SETTINGS_DIRTY = true;
+  }
+
+  if (
+    isContinuousBrushActive &&
+    (brush === "DISTURBANCE" || brush === "DENSITY_PAINT")
+  ) {
+    if (activeBrushHit) {
+      interact(activeBrushHit.i, activeBrushHit.j, activeBrushHit.lIdx);
+    }
+  }
+
+  if (brush === "SDF_PLACE" && $("sdf-menu").style.display === "block") {
+    updateStampPreview();
+  }
+
+  meshes.forEach((m, i) => {
+    if (!layers[i]) return;
+    const l = layers[i];
+    if (!l.vis) {
+      m.visible = false;
+      return;
+    }
+    m.visible = true;
+
+    const isMeshVis = !IS_3D_MODE && m.userData.visMode === "MESH";
+
+    var pos = m.geometry.attributes.position.array;
+    var hAttr = m.geometry.attributes.waveHeight.array;
+    var vAttr = m.geometry.attributes.waveVelocity.array;
+    var dAttr = m.geometry.attributes.aDensity.array;
+
+    for (let k = 0; k < GRID * GRID; k++) {
+      hAttr[k] = u[i][k];
+      vAttr[k] = u[i][k] - u_prev[i][k];
+      let combinedDensity = den[i][k] + layerDensityModulations[i][k];
+      combinedDensity = Math.max(combinedDensity, GLOBAL_DEN[k]);
+      dAttr[k] = Math.min(1.0, combinedDensity);
+
+      if (isMeshVis) {
+        pos[k * 3 + 1] = u[i][k] * ZSC * 0.1;
+      }
+    }
+    m.geometry.attributes.waveHeight.needsUpdate = true;
+    m.geometry.attributes.waveVelocity.needsUpdate = true;
+    m.geometry.attributes.aDensity.needsUpdate = true;
+    if (isMeshVis) m.geometry.attributes.position.needsUpdate = true;
+
+    if (isMeshVis) m.geometry.computeVertexNormals();
+
+    if (m.material.uniforms && VIZ_SETTINGS_DIRTY) {
+      m.material.uniforms.SUN_DIR.value = sunDir;
+      m.material.uniforms.LIGHT_INTENSITY.value = lInt;
+      m.material.uniforms.REFLECTIVITY.value = REFLECTIVITY;
+      m.material.uniforms.VIS_MIN.value = visMin;
+      m.material.uniforms.VIS_MAX.value = visMax;
+      m.material.uniforms.uExposure.value = EXPOSURE;
+      if (m.material.uniforms.uZScale) {
+        m.material.uniforms.uZScale.value = ZSC;
+      }
+      if (m.material.uniforms.uPointSize) {
+        m.material.uniforms.uPointSize.value = l.pointSize;
+      }
+      if (m.material.uniforms.uPointScaleFactor) {
+        m.material.uniforms.uPointScaleFactor.value = l.pointScaleFactor;
+      }
+      if (m.material.uniforms.uPointFalloff) {
+        m.material.uniforms.uPointFalloff.value = l.pointFalloff;
+      }
+    }
+  });
+
+  if (VIZ_SETTINGS_DIRTY) {
+    VIZ_SETTINGS_DIRTY = false;
+  }
+
+  updCam();
+  renderer.render(scene, camera);
+}
 
       function updateLayerParamUI(layerIndex, prop) {
         const l = layers[layerIndex];
@@ -6361,211 +6448,210 @@ function setupScene() {
       }
 
 var updVis = () => {
-        visMin = parseFloat($("i-vis-min").value);
-        visMax = parseFloat($("i-vis-max").value);
-        if (visMin > visMax) {
-          if (document.activeElement.id === "i-vis-min") {
-            visMax = visMin;
-            $("i-vis-max").value = visMax;
-          } else {
-            visMin = visMax;
-            $("i-vis-min").value = visMin;
-          }
-        }
-        $("l-vism").innerText = `${visMin.toFixed(2)} - ${visMax.toFixed(2)}`;
-        meshes.forEach((m) => {
-          if (m.material.uniforms) {
-            m.material.uniforms.VIS_MIN.value = visMin;
-            m.material.uniforms.VIS_MAX.value = visMax;
-          }
-        });
-      };
+  visMin = parseFloat($("i-vis-min").value);
+  visMax = parseFloat($("i-vis-max").value);
+  if (visMin > visMax) {
+    if (document.activeElement.id === "i-vis-min") {
+      visMax = visMin;
+      $("i-vis-max").value = visMax;
+    } else {
+      visMin = visMax;
+      $("i-vis-min").value = visMin;
+    }
+  }
+  $("l-vism").innerText = `${visMin.toFixed(2)} - ${visMax.toFixed(2)}`;
+  VIZ_SETTINGS_DIRTY = true;
+};
 
 function setupSliderListeners() {
-        $("i-res").onchange = (e) => {
-          resizeSim(+e.target.value);
-        };
+  $("i-res").onchange = (e) => {
+    resizeSim(+e.target.value);
+  };
 
-        $("i-gap").oninput = (e) => {
-          GAP = +e.target.value;
-          $("l-gap").innerText = GAP;
-          updTr();
-          syncE();
-        };
-        $("i-z").oninput = (e) => {
-          ZSC = +e.target.value;
-          $("l-z").innerText = ZSC.toFixed(1);
-        };
-        $("i-li").oninput = (e) => {
-          lInt = +e.target.value;
-          $("l-li").innerText = lInt;
-        };
-        $("i-refl").oninput = (e) => {
-          REFLECTIVITY = +e.target.value;
-          $("l-refl").innerText = REFLECTIVITY.toFixed(2);
-          syncM();
-        };
-        $("i-vo").oninput = (e) => {
-          var op = parseFloat(e.target.value);
-          $("l-vo").innerText = op.toFixed(2);
-          syncM();
-        };
+  $("i-gap").oninput = (e) => {
+    GAP = +e.target.value;
+    $("l-gap").innerText = GAP;
+    updTr();
+    syncE();
+  };
+  $("i-z").oninput = (e) => {
+    ZSC = +e.target.value;
+    $("l-z").innerText = ZSC.toFixed(1);
+    VIZ_SETTINGS_DIRTY = true;
+  };
+  $("i-li").oninput = (e) => {
+    lInt = +e.target.value;
+    $("l-li").innerText = lInt;
+    VIZ_SETTINGS_DIRTY = true;
+  };
+  $("i-refl").oninput = (e) => {
+    REFLECTIVITY = +e.target.value;
+    $("l-refl").innerText = REFLECTIVITY.toFixed(2);
+    syncM();
+    VIZ_SETTINGS_DIRTY = true;
+  };
+  $("i-vo").oninput = (e) => {
+    var op = parseFloat(e.target.value);
+    $("l-vo").innerText = op.toFixed(2);
+    syncM();
+    VIZ_SETTINGS_DIRTY = true;
+  };
 
-        $("i-exposure").oninput = (e) => {
-          EXPOSURE = parseFloat(e.target.value);
-          $("l-exposure").innerText = EXPOSURE.toFixed(2);
-          meshes.forEach((m) => {
-            if (m.material.uniforms && m.material.uniforms.uExposure) {
-              m.material.uniforms.uExposure.value = EXPOSURE;
-            }
-          });
-        };
+  $("i-exposure").oninput = (e) => {
+    EXPOSURE = parseFloat(e.target.value);
+    $("l-exposure").innerText = EXPOSURE.toFixed(2);
+    VIZ_SETTINGS_DIRTY = true;
+  };
 
-        $("cb-auto-exposure").onchange = (e) => {
-          AUTO_EXPOSURE = e.target.checked;
-          $("i-exposure").disabled = AUTO_EXPOSURE;
-        };
+  $("cb-auto-exposure").onchange = (e) => {
+    AUTO_EXPOSURE = e.target.checked;
+    $("i-exposure").disabled = AUTO_EXPOSURE;
+  };
 
-        const iVd = $("i-vd");
-        if (iVd) {
-          iVd.oninput = (e) => {
-            VOL_LAYERS = +e.target.value;
-            $("l-vd").innerText = VOL_LAYERS;
-            if (IS_3D_MODE) {
-              layers = [];
-              for (let k = 0; k < VOL_LAYERS; k++) {
-                layers.push(defL(layerCounter++));
-              }
-              initData();
-            }
-          };
+  const iVd = $("i-vd");
+  if (iVd) {
+    iVd.oninput = (e) => {
+      VOL_LAYERS = +e.target.value;
+      $("l-vd").innerText = VOL_LAYERS;
+      if (IS_3D_MODE) {
+        layers = [];
+        for (let k = 0; k < VOL_LAYERS; k++) {
+          layers.push(defL(layerCounter++));
         }
-        const cbShowDen = $("cb-show-den");
-        if (cbShowDen) {
-          cbShowDen.onchange = (e) => {
-            SHOW_DENSITY = e.target.checked;
-            syncM();
-          };
-          SHOW_DENSITY = cbShowDen.checked;
-        }
+        initData();
+      }
+    };
+  }
+  const cbShowDen = $("cb-show-den");
+  if (cbShowDen) {
+    cbShowDen.onchange = (e) => {
+      SHOW_DENSITY = e.target.checked;
+      syncM();
+      VIZ_SETTINGS_DIRTY = true;
+    };
+    SHOW_DENSITY = cbShowDen.checked;
+  }
 
-        const cbVolBox = $("cb-vol-box");
-        if (cbVolBox) {
-          cbVolBox.onchange = (e) => {
-            SHOW_VOL_WIREFRAME = e.target.checked;
-            updateVolumeBox();
-          };
-        }
+  const cbVolBox = $("cb-vol-box");
+  if (cbVolBox) {
+    cbVolBox.onchange = (e) => {
+      SHOW_VOL_WIREFRAME = e.target.checked;
+      updateVolumeBox();
+    };
+  }
 
-        const cbModAlpha = $("cb-mod-alpha");
-        if (cbModAlpha) {
-          cbModAlpha.onchange = (e) => {
-            IS_ALPHA_MODULATION = e.target.checked;
-            syncM();
-          };
-          IS_ALPHA_MODULATION = cbModAlpha.checked;
-        }
-const cbVolAbsorb = $("cb-vol-absorb");
-    if (cbVolAbsorb) {
-        cbVolAbsorb.onchange = (e) => {
-            IS_VOL_ABSORBING_BND = e.target.checked;
-        };
-        cbVolAbsorb.checked = IS_VOL_ABSORBING_BND; 
-    }
-        const iPsz = $("i-psz");
-        const lPsz = $("l-psz");
-        if (iPsz && lPsz) {
-          iPsz.oninput = (e) => {
-            BASE_POINT_SETTINGS.pointSize = parseFloat(e.target.value);
-            lPsz.innerText = BASE_POINT_SETTINGS.pointSize.toFixed(1);
-            layers.forEach(
-              (l) => (l.pointSize = BASE_POINT_SETTINGS.pointSize),
-            );
-            meshes.forEach((m) => {
-              if (m.material.uniforms)
-                m.material.uniforms.uPointSize.value =
-                  BASE_POINT_SETTINGS.pointSize;
-            });
-          };
-        }
-        const iPsc = $("i-psc");
-        const lPsc = $("l-psc");
-        if (iPsc && lPsc) {
-          iPsc.oninput = (e) => {
-            BASE_POINT_SETTINGS.pointScaleFactor = parseFloat(e.target.value);
-            lPsc.innerText = BASE_POINT_SETTINGS.pointScaleFactor.toFixed(1);
-            layers.forEach(
-              (l) =>
-                (l.pointScaleFactor = BASE_POINT_SETTINGS.pointScaleFactor),
-            );
-            meshes.forEach((m) => {
-              if (m.material.uniforms)
-                m.material.uniforms.uPointScaleFactor.value =
-                  BASE_POINT_SETTINGS.pointScaleFactor;
-            });
-          };
-        }
+  const cbModAlpha = $("cb-mod-alpha");
+  if (cbModAlpha) {
+    cbModAlpha.onchange = (e) => {
+      IS_ALPHA_MODULATION = e.target.checked;
+      syncM();
+      VIZ_SETTINGS_DIRTY = true;
+    };
+    IS_ALPHA_MODULATION = cbModAlpha.checked;
+  }
+  const cbVolAbsorb = $("cb-vol-absorb");
+  if (cbVolAbsorb) {
+    cbVolAbsorb.onchange = (e) => {
+      IS_VOL_ABSORBING_BND = e.target.checked;
+    };
+    cbVolAbsorb.checked = IS_VOL_ABSORBING_BND;
+  }
+  const iPsz = $("i-psz");
+  const lPsz = $("l-psz");
+  if (iPsz && lPsz) {
+    iPsz.oninput = (e) => {
+      BASE_POINT_SETTINGS.pointSize = parseFloat(e.target.value);
+      lPsz.innerText = BASE_POINT_SETTINGS.pointSize.toFixed(1);
+      layers.forEach(
+        (l) => (l.pointSize = BASE_POINT_SETTINGS.pointSize),
+      );
+      meshes.forEach((m) => {
+        if (m.material.uniforms)
+          m.material.uniforms.uPointSize.value =
+            BASE_POINT_SETTINGS.pointSize;
+      });
+      VIZ_SETTINGS_DIRTY = true;
+    };
+  }
+  const iPsc = $("i-psc");
+  const lPsc = $("l-psc");
+  if (iPsc && lPsc) {
+    iPsc.oninput = (e) => {
+      BASE_POINT_SETTINGS.pointScaleFactor = parseFloat(e.target.value);
+      lPsc.innerText = BASE_POINT_SETTINGS.pointScaleFactor.toFixed(1);
+      layers.forEach(
+        (l) =>
+        (l.pointScaleFactor = BASE_POINT_SETTINGS.pointScaleFactor),
+      );
+      meshes.forEach((m) => {
+        if (m.material.uniforms)
+          m.material.uniforms.uPointScaleFactor.value =
+            BASE_POINT_SETTINGS.pointScaleFactor;
+      });
+      VIZ_SETTINGS_DIRTY = true;
+    };
+  }
 
-        $("i-vis-min").oninput = updVis;
-        $("i-vis-max").oninput = updVis;
-        var sd = () => {
-          var p = $("i-sp").value * 0.01745,
-            y = $("i-sy").value * 0.01745;
-          sunDir
-            .set(
-              Math.sin(p) * Math.sin(y),
-              Math.cos(p),
-              Math.sin(p) * Math.cos(y),
-            )
-            .normalize();
-        };
-        $("i-sp").oninput = sd;
-        $("i-sy").oninput = sd;
-        sd();
+  $("i-vis-min").oninput = updVis;
+  $("i-vis-max").oninput = updVis;
+  var sd = () => {
+    var p = $("i-sp").value * 0.01745,
+      y = $("i-sy").value * 0.01745;
+    sunDir
+      .set(
+        Math.sin(p) * Math.sin(y),
+        Math.cos(p),
+        Math.sin(p) * Math.cos(y),
+      )
+      .normalize();
+    VIZ_SETTINGS_DIRTY = true;
+  };
+  $("i-sp").oninput = sd;
+  $("i-sy").oninput = sd;
+  sd();
 
-        EV("i-gden-abs", "input", updateSimControls);
-        EV("i-gden-ref", "input", updateSimControls);
-        EV("btn-reset-global-den", "click", resetGlobalDensity);
+  EV("i-gden-abs", "input", updateSimControls);
+  EV("i-gden-ref", "input", updateSimControls);
+  EV("btn-reset-global-den", "click", resetGlobalDensity);
 
-        ["b-dist", "b-emit", "b-valve", "b-den", "b-sdf"].forEach((id) => {
-          const btn = $(id);
-          btn.onclick = function () {
-            ["b-dist", "b-emit", "b-valve", "b-den", "b-sdf"].forEach(
-              (b) => ($(b).className = ""),
-            );
-            this.className = "active";
-            brush = btn.dataset.brush;
-            const isSDF = brush === "SDF_PLACE";
-            const isValve = brush === "VALVE_PLACE";
-            $("sdf-menu").style.display = isSDF ? "block" : "none";
-            $("valve-menu").style.display = "none";
-            $("emit-menu").style.display = "none";
+  ["b-dist", "b-emit", "b-valve", "b-den", "b-sdf"].forEach((id) => {
+    const btn = $(id);
+    btn.onclick = function () {
+      ["b-dist", "b-emit", "b-valve", "b-den", "b-sdf"].forEach(
+        (b) => ($(b).className = ""),
+      );
+      this.className = "active";
+      brush = btn.dataset.brush;
+      const isSDF = brush === "SDF_PLACE";
+      const isValve = brush === "VALVE_PLACE";
+      $("sdf-menu").style.display = isSDF ? "block" : "none";
+      $("valve-menu").style.display = "none";
+      $("emit-menu").style.display = "none";
 
-            if (isSDF) {
-              updateSDFControls();
-              renderSDFPreview();
-              updateStampPreview();
-            } else {
-              disposeMesh(stampPreviewMesh);
-              stampPreviewMesh = null;
-            }
-
-            if (id !== "b-emit") {
-                selectedEmitterId = null;
-                updateEmitterInspector();
-            }
-            if (id !== "b-valve") {
-                selectedValveId = null;
-                updateValveInspector();
-            }
-
-            syncM();
-
-            renderDynamicBrushControls();
-          };
-        });
+      if (isSDF) {
+        updateSDFControls();
+        renderSDFPreview();
+        updateStampPreview();
+      } else {
+        disposeMesh(stampPreviewMesh);
+        stampPreviewMesh = null;
       }
 
+      if (id !== "b-emit") {
+        selectedEmitterId = null;
+        updateEmitterInspector();
+      }
+      if (id !== "b-valve") {
+        selectedValveId = null;
+        updateValveInspector();
+      }
+
+      syncM();
+
+      renderDynamicBrushControls();
+    };
+  });
+}
    function setupGlobalEvents() {
         setupEmitMenuDrag();
         setupValveMenuDrag();
@@ -6815,6 +6901,40 @@ const cbVolAbsorb = $("cb-vol-absorb");
           updateEmitterInspector();
           syncE();
         });
+		
+		EV("i-steps", "input", (e) => {
+  SIM_STEPS_PER_FRAME = +e.target.value;
+  $("l-steps").innerText = SIM_STEPS_PER_FRAME;
+});
+
+EV("i-buf-size", "input", (e) => {
+  SIM_SAMPLES_PER_AUDIO_BUFFER = +e.target.value;
+  $("l-buf-size").innerText = SIM_SAMPLES_PER_AUDIO_BUFFER;
+});
+
+EV("i-sim-per-step", "input", (e) => {
+  SIM_SAMPLES_PER_STEP = +e.target.value;
+  $("l-sim-per-step").innerText = SIM_SAMPLES_PER_STEP;
+});
+
+// Reconnect Audio Button
+EV("btn-reconnect-audio", "click", () => {
+  stopAudio(); 
+  stopRealtimeAudio();
+  if (ACTIVE_PROBE_ID) {
+      // If a probe is active, assume user wants to start/restart live mode.
+      startRealtimeAudio(); 
+      $("err").innerText = "Audio settings applied. Live mode restarted.";
+  } else {
+      $("err").innerText = "Audio settings applied. Start Live Mode from probe menu.";
+  }
+});
+
+// Ensure sliders have the custom drag behavior
+const perfSliders = document.querySelectorAll('#sim-performance-content input[type="range"]');
+perfSliders.forEach(slider => {
+    slider.classList.add("custom-drag-slider");
+});
 
         setupSDFMenuHandlers();
         setupSDFMenuDrag();
