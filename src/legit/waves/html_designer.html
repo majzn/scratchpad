@@ -87,14 +87,23 @@
             background-color: #3e3e3e;
             color: #ddd;
         }
+        #inspector-tabs {
+            display: flex;
+            flex-wrap: wrap;
+            margin-top: 4px;
+            margin-bottom: 0;
+        }
         .tab-button {
-            padding: 4px 8px;
+            padding: 4px 6px;
             border: 1px solid #444;
             border-bottom: none;
             background-color: #2d2d2d;
             color: #ccc;
-            font-size: 11px;
+            font-size: 10px;
             margin-right: -1px;
+            flex-grow: 1;
+            flex-basis: auto;
+            min-width: fit-content;
         }
         .tab-button.active {
             background-color: #1e1e1e;
@@ -173,6 +182,10 @@
             height: 16px;
             margin-right: 4px;
         }
+        #js-globals-content {
+            font-family: monospace;
+            font-size: 10px;
+        }
     </style>
     <script>
         tailwind.config = {
@@ -191,7 +204,7 @@
     <div id="main-container">
         
         <header id="top-bar" class="flex items-center justify-between z-10">
-            <h1 class="text-lg font-bold">HTML Inspector v3.0</h1>
+            <h1 class="text-lg font-bold">HTML Inspector v3.6</h1>
             
             <div class="flex items-center space-x-1">
                 <label for="file-input" class="cursor-pointer bg-gray-600 hover:bg-gray-700 font-semibold border border-gray-500">
@@ -248,7 +261,7 @@
                     <p id="status-message" class="text-gray-300">Load a file to start editing.</p>
                 </div>
                 
-                <div id="inspector-tabs" class="flex mt-1">
+                <div id="inspector-tabs">
                     <button class="tab-button active" data-tab="tab-content">Content</button>
                     <button class="tab-button" data-tab="tab-layout">Layout</button>
                     <button class="tab-button" data-tab="tab-spacing">Spacing</button>
@@ -256,6 +269,7 @@
                     <button class="tab-button" data-tab="tab-attributes">Attributes</button>
                     <button class="tab-button" data-tab="tab-hierarchy">Hierarchy</button>
                     <button class="tab-button" data-tab="tab-profiler">Profiler</button>
+                    <button class="tab-button" data-tab="tab-js-globals">JS Globals</button>
                 </div>
 
                 <div id="tab-content-wrapper" class="pt-0">
@@ -273,9 +287,6 @@
                             <label for="element-content" class="block text-xs font-medium text-gray-400">Inner Content / Text</label>
                             <textarea id="element-content" rows="4" placeholder="Edit the text or HTML content here." class="w-full"></textarea>
                         </div>
-                        <button id="apply-content-button" disabled class="w-full bg-green-600 hover:bg-green-700 text-white py-0.5 disabled:opacity-50">
-                            Apply Content/Attributes
-                        </button>
                     </div>
                     
                     <div id="tab-layout" class="tab-content space-y-2">
@@ -443,13 +454,19 @@
                             <li class="text-gray-400">Load a file to analyze...</li>
                         </ul>
                     </div>
+                    
+                    <div id="tab-js-globals" class="tab-content space-y-2">
+                        <div class="p-1 bg-gray-700 text-white font-semibold text-xs">Global JavaScript (Scripts consolidated upon save)</div>
+                        <textarea id="js-globals-content" rows="10" placeholder="// All inline JS will be consolidated here upon load.\n// Add your global variables or functions here..." class="w-full font-mono text-xs"></textarea>
+                        <p class="text-xs text-gray-400">Note: All inline &lt;script&gt; tags (without `src`) from the loaded file are merged here. The merged code is saved into a single &lt;script id="designer-js-globals"&gt; tag in the output file.</p>
+                    </div>
 
                 </div>
             </div>
         </div>
     </div>
 
-    <script>
+    <script id="designer-main-script">
         const fileInput = document.getElementById('file-input');
         const previewIframe = document.getElementById('preview-iframe');
         const saveButton = document.getElementById('save-button');
@@ -460,7 +477,6 @@
         const deleteElementButton = document.getElementById('delete-element-button');
         const duplicateElementButton = document.getElementById('duplicate-element-button');
         const newElementTypeSelect = document.getElementById('new-element-type');
-        const applyContentButton = document.getElementById('apply-content-button');
         const addAttributeButton = document.getElementById('add-attribute-button');
         const attributeList = document.getElementById('attribute-list');
         const newAttrKeyInput = document.getElementById('new-attr-key');
@@ -473,6 +489,7 @@
         const styleDefinitionTextarea = document.getElementById('new-class-definition');
         const addClassButton = document.getElementById('add-class-button');
         const classListDiv = document.getElementById('defined-class-list');
+        const jsGlobalsTextarea = document.getElementById('js-globals-content');
         
         const cssControls = {
             'padding': 'padding',
@@ -501,6 +518,46 @@
             document.getElementById(tabId).classList.add('active');
         }
 
+        function getOrCreateScriptTag(iframeDoc) {
+            let script = iframeDoc.getElementById('designer-js-globals');
+            if (!script) {
+                script = iframeDoc.createElement('script');
+                script.id = 'designer-js-globals';
+                script.type = 'text/javascript';
+                if (iframeDoc.body) {
+                    iframeDoc.body.appendChild(script);
+                } else {
+                    return null; 
+                }
+            }
+            return script;
+        }
+
+        function executeJsGlobals() {
+            const iframeWin = previewIframe.contentWindow;
+            const jsCode = jsGlobalsTextarea.value.trim();
+            const iframeDoc = iframeWin.document;
+
+            const jsScript = getOrCreateScriptTag(iframeDoc);
+            if (!jsScript) {
+                 statusMessage.textContent = 'Preview not ready for JS execution.';
+                 return;
+            }
+            jsScript.textContent = jsCode;
+            
+            if (jsCode) {
+                try {
+                    iframeWin.eval(jsCode);
+                    statusMessage.textContent = 'JavaScript executed successfully.';
+                } catch (e) {
+                    statusMessage.textContent = `JS Execution Error: ${e.message}. See console.`;
+                    console.error('JS Execution Error in Preview:', e);
+                }
+            } else {
+                statusMessage.textContent = 'JavaScript cleared and executed.';
+            }
+        }
+
         function loadFile(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -511,13 +568,33 @@
             reader.onload = (e) => {
                 const htmlContent = e.target.result;
                 
+                const parser = new DOMParser();
+                const tempDoc = parser.parseFromString(htmlContent, 'text/html');
+                
+                const inlineScripts = Array.from(tempDoc.querySelectorAll('script:not([src])'));
+                
+                let combinedScriptContent = '';
+                
+                inlineScripts.forEach(script => {
+                    if (script.id !== 'designer-stylesheet' && script.id !== 'designer-main-script') { 
+                        combinedScriptContent += script.textContent.trim() + '\n\n';
+                    }
+                });
+
+                jsGlobalsTextarea.value = combinedScriptContent.trim() || '// All inline JS will be consolidated here upon load.\n// Add your global variables or functions here...';
+
                 const iframeDoc = previewIframe.contentWindow.document;
                 iframeDoc.open();
                 iframeDoc.write(htmlContent);
                 iframeDoc.close();
                 
-                previewIframe.onload = () => setupIframeInteraction(iframeDoc);
-                setTimeout(() => setupIframeInteraction(iframeDoc), 100);
+                const processIframeContent = (doc) => {
+                    setupIframeInteraction(doc);
+                    executeJsGlobals(); 
+                };
+
+                previewIframe.onload = () => processIframeContent(iframeDoc);
+                setTimeout(() => processIframeContent(iframeDoc), 100);
 
                 saveButton.disabled = false;
                 statusMessage.textContent = `File loaded successfully: ${file.name}. Click an element to inspect.`;
@@ -531,7 +608,11 @@
             if (!style) {
                 style = iframeDoc.createElement('style');
                 style.id = 'designer-stylesheet';
-                iframeDoc.head.appendChild(style);
+                if (iframeDoc.head) {
+                    iframeDoc.head.appendChild(style);
+                } else {
+                    return null;
+                }
             }
             return style;
         }
@@ -540,6 +621,7 @@
             if (!iframeDoc || !iframeDoc.body) return;
 
             getOrCreateStyleSheet(iframeDoc);
+            getOrCreateScriptTag(iframeDoc);
 
             iframeDoc.body.querySelectorAll('*').forEach(el => {
                 if (el.tagName !== 'SCRIPT' && el.tagName !== 'STYLE' && el.tagName !== 'HEAD') {
@@ -662,13 +744,15 @@
             addElementButton.disabled = false; 
             deleteElementButton.disabled = !canModify;
             duplicateElementButton.disabled = !canModify;
-            applyContentButton.disabled = !canModify;
             addAttributeButton.disabled = !canModify;
             elementContentTextarea.disabled = !canModify;
 
             elementIdInput.value = element.id || '';
             elementClassInput.value = element.className || '';
-            elementContentTextarea.value = element.outerHTML.replace(element.innerHTML, '').replace(element.tagName, '').slice(2, -1) === '' ? element.innerHTML : '';
+            
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = element.innerHTML;
+            elementContentTextarea.value = tempDiv.innerHTML;
             
             for (const inputId in cssControls) {
                 const propName = cssControls[inputId];
@@ -838,32 +922,6 @@
             statusMessage.textContent = `Applied style "${propertyName}: ${value}" to <${activeElement.tagName.toLowerCase()}>.`;
         }
         
-        function applyContentAndAttributes() {
-            if (!activeElement || activeElement.tagName === 'BODY' || activeElement.tagName === 'HTML') return;
-            
-            const newId = elementIdInput.value.trim();
-            const newClass = elementClassInput.value.trim();
-            const newContent = elementContentTextarea.value;
-
-            if (activeElement.id !== newId) {
-                activeElement.id = newId;
-            }
-
-            if (activeElement.className !== newClass) {
-                activeElement.className = newClass;
-                renderStyles();
-            }
-
-            if (activeElement.innerHTML !== newContent) {
-                 activeElement.innerHTML = newContent;
-            }
-            
-            statusMessage.textContent = 'Content and core attributes applied.';
-            renderAttributes();
-            generateProfilerData(previewIframe.contentWindow.document);
-            renderHierarchy(previewIframe.contentWindow.document);
-        }
-
         function addElement() {
             if (!previewIframe.contentWindow) return;
 
@@ -962,15 +1020,49 @@
         function saveFile() {
             if (!previewIframe.contentWindow) return;
 
+            const iframeDoc = previewIframe.contentWindow.document;
+
+            if (activeElement && activeElement.tagName !== 'BODY' && activeElement.tagName !== 'HTML') {
+                const newId = elementIdInput.value.trim();
+                const newClass = elementClassInput.value.trim();
+                const newContent = elementContentTextarea.value;
+                
+                if (activeElement.id !== newId) {
+                    activeElement.id = newId;
+                }
+                if (activeElement.className !== newClass) {
+                    activeElement.className = newClass;
+                    renderStyles(); 
+                }
+                if (activeElement.innerHTML !== newContent) {
+                     activeElement.innerHTML = newContent;
+                }
+                generateProfilerData(iframeDoc);
+                renderHierarchy(iframeDoc);
+            }
+
+            const scriptsToRemove = Array.from(iframeDoc.querySelectorAll('script:not([src])'));
+            scriptsToRemove.forEach(script => {
+                if (script.id !== 'designer-main-script') {
+                    script.remove();
+                }
+            });
+
+            const jsScript = getOrCreateScriptTag(iframeDoc);
+            if(jsScript) {
+                jsScript.textContent = jsGlobalsTextarea.value.trim();
+                iframeDoc.body.appendChild(jsScript);
+            }
+
             if(activeElement) {
                 activeElement.style.outline = '';
                 activeElement.style.outlineOffset = '';
             }
             
-            previewIframe.contentWindow.document.querySelectorAll('[data-node-id]').forEach(el => el.removeAttribute('data-node-id'));
-            previewIframe.contentWindow.document.querySelectorAll('[data-collapsed]').forEach(el => el.removeAttribute('data-collapsed'));
+            iframeDoc.querySelectorAll('[data-node-id]').forEach(el => el.removeAttribute('data-node-id'));
+            iframeDoc.querySelectorAll('[data-collapsed]').forEach(el => el.removeAttribute('data-collapsed'));
             
-            let newContent = previewIframe.contentWindow.document.documentElement.outerHTML;
+            let newContent = iframeDoc.documentElement.outerHTML;
 
             if(activeElement) {
                 activeElement.style.outline = '3px solid #ef4444'; 
@@ -1007,25 +1099,30 @@
             const iframeDoc = previewIframe.contentWindow.document;
             if (!iframeDoc) return;
             const styleElement = getOrCreateStyleSheet(iframeDoc);
+            if (!styleElement) return; // Guard for style element creation failure
 
             let newStyleSheet = '';
             let isUpdated = false;
+            
+            let existingRules = styleElement.textContent.split('}');
+            
+            for (let i = 0; i < existingRules.length; i++) {
+                const rule = existingRules[i].trim();
+                if (!rule) continue;
 
-            styleElement.textContent.split('}').forEach(rule => {
-                const trimmedRule = rule.trim();
-                if (trimmedRule.includes(className)) {
-                    newStyleSheet += `${className} { ${definition} }`;
+                if (rule.includes(className)) {
+                    newStyleSheet += `${className} { ${definition} }\n`;
                     isUpdated = true;
-                } else if (trimmedRule) {
-                    newStyleSheet += trimmedRule + '}';
+                } else {
+                    newStyleSheet += rule + '}\n';
                 }
-            });
-
+            }
+            
             if (!isUpdated) {
-                newStyleSheet += `${className} { ${definition} }`;
+                newStyleSheet += `${className} { ${definition} }\n`;
             }
 
-            styleElement.textContent = newStyleSheet;
+            styleElement.textContent = newStyleSheet.trim();
             styleNameInput.value = '';
             styleDefinitionTextarea.value = '';
             statusMessage.textContent = `Class '${className}' ${isUpdated ? 'updated' : 'added'} successfully.`;
@@ -1037,6 +1134,7 @@
             const iframeDoc = previewIframe.contentWindow.document;
             if (!iframeDoc) return;
             const styleElement = getOrCreateStyleSheet(iframeDoc);
+            if (!styleElement) return; // Guard for style element access failure
             
             let classNames = [];
             const regex = /\.([a-zA-Z0-9_-]+)\s*\{/g;
@@ -1094,11 +1192,11 @@
 
         fileInput.addEventListener('change', loadFile);
         saveButton.addEventListener('click', saveFile);
+        jsGlobalsTextarea.addEventListener('input', executeJsGlobals);
 
         addElementButton.addEventListener('click', addElement);
         deleteElementButton.addEventListener('click', deleteElement);
         duplicateElementButton.addEventListener('click', duplicateElement);
-        applyContentButton.addEventListener('click', applyContentAndAttributes);
         addAttributeButton.addEventListener('click', addAttribute);
         addClassButton.addEventListener('click', addClassDefinition);
         
@@ -1123,6 +1221,5 @@
         });
 
     </script>
-
 </body>
 </html>
